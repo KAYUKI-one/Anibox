@@ -10,6 +10,10 @@ export const desktop: DesktopBridge = isTauri()
   ? {
       available: true,
       discoverCores: () => invoke('discover_cores'),
+      checkCoreUpdates: (force) => invoke('check_core_updates', { force }),
+      installCoreUpdate: (core, version, config, managed) =>
+        invoke('install_core_update', { core, version, config: config ?? null, managed: managed ?? false }),
+      rollbackCore: (core) => invoke('rollback_core', { core }),
       validate: (core, config) => invoke('validate_config', { core, config }),
       start: (core, config, mode, managed = false) => invoke('start_core', { core, config, mode, managed }),
       stop: () => invoke('stop_core'),
@@ -27,6 +31,9 @@ export const desktop: DesktopBridge = isTauri()
   : {
       available: false,
       discoverCores: async () => [],
+      checkCoreUpdates: nativeOnly,
+      installCoreUpdate: nativeOnly,
+      rollbackCore: nativeOnly,
       validate: nativeOnly,
       start: nativeOnly,
       stop: nativeOnly,

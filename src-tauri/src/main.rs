@@ -1,5 +1,6 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
+mod core_updates;
 mod process_job;
 mod proxy;
 mod rules;
@@ -89,6 +90,8 @@ struct AppState {
     rules: Mutex<()>,
     updating_rules: Mutex<bool>,
     sampler: Mutex<traffic::Sampler>,
+    core_install: Mutex<()>,
+    updating_cores: Mutex<bool>,
 }
 
 fn app_dir(app: &tauri::AppHandle) -> Result<PathBuf, String> {
@@ -111,6 +114,13 @@ fn nonce() -> String {
 }
 
 fn find_core(app: &tauri::AppHandle, core: Core) -> Result<PathBuf, String> {
+    if let Some(path) = core_updates::installed(app, core) {
+        return Ok(path);
+    }
+    bundled_core(app, core)
+}
+
+fn bundled_core(app: &tauri::AppHandle, core: Core) -> Result<PathBuf, String> {
     let mut roots = vec![];
     if let Ok(path) = app.path().resource_dir() {
         roots.push(path.join("cores").join(core.name()));
@@ -443,6 +453,8 @@ async fn start_core(
     managed: Option<bool>,
 ) -> Result<RuntimeStatus, String> {
     tauri::async_runtime::spawn_blocking(move || {
+        let state = app.state::<AppState>();
+        let _install = state.core_install.lock().map_err(|_| "内核更新不可用")?;
         if !["local", "system", "tun"].contains(&mode.as_str()) {
             return Err("连接方式无效".into());
         }
@@ -919,7 +931,10 @@ fn main() {
             traffic_stats,
             rules_status,
             update_rules,
-            current_config
+            current_config,
+            core_updates::check_core_updates,
+            core_updates::install_core_update,
+            core_updates::rollback_core
         ])
         .build(tauri::generate_context!())
         .expect("无法启动 Anibox");

@@ -1,0 +1,67 @@
+# 配置说明
+
+## 导入
+
+主页可粘贴分享链接或原生 JSON，也可从文件导入。订阅页添加订阅地址，点击更新获取节点。
+节点页修改单个出站；内核页编辑完整配置。配置使用严格 JSON，保存后可执行内核校验。
+订阅更新保留已在本地修改的节点。
+
+## 入站与出站
+
+默认 SOCKS 入站为 `127.0.0.1:10808`，HTTP 入站为 `127.0.0.1:10809`，端口可在设置中修改。
+系统代理需要监听本机的无认证 HTTP 或 mixed 入站。TUN 配置需要对应内核的 TUN 入站。
+
+在 `outbounds` 中定义出站并设置唯一 `tag`，再通过路由规则将流量送往该出站。
+完整原生配置不会自动补充入站、DNS、路由或统计接口。
+
+## 按域名分流
+
+以下规则将 `google.com` 及其子域名交给已有的 `proxy-google` 出站，不需要外部规则文件。
+将具体规则放在更宽泛的规则之前；`googleapis.com`、`gstatic.com` 等其他域名需要另外添加。
+
+Xray：加入 `routing.rules`。
+
+```json
+{
+  "type": "field",
+  "domain": ["domain:google.com"],
+  "outboundTag": "proxy-google"
+}
+```
+
+sing-box：加入 `route.rules`。
+
+```json
+{
+  "domain_suffix": ["google.com"],
+  "action": "route",
+  "outbound": "proxy-google"
+}
+```
+
+Xray 精确匹配单个域名使用 `full:google.com`；sing-box 对应 `"domain": ["google.com"]`。
+域名规则需要连接携带目标域名，或通过配置中的嗅探等方式获得域名；仅有目标 IP 时不能直接匹配域名。
+
+## 规则集
+
+Xray 的 `geosite:cn`、`geoip:cn` 分别依赖 `geosite.dat`、`geoip.dat`。
+sing-box 的 `rule_set` 需要声明本地文件或远程规则集，并在规则中引用对应 `tag`。
+默认大陆分流使用 `geosite-cn` 和 `geoip-cn`，内网 IP 由内置规则处理。
+广告过滤、按服务分流等功能可以自行添加相应规则集。
+
+原生配置中的相对文件路径以实际内核所在目录为基准；自定义规则建议使用绝对路径，或使用 sing-box 远程规则集。
+
+## 内核与规则更新
+
+应用运行期间自动检查两种内核的官方 GitHub 稳定版；内核页也可手动检查。
+发现新版后点击更新，程序自动下载、校验 SHA256，并检查内核版本和当前所选配置（如适用）。
+更新成功后重新连接生效；下载或校验失败保留原内核。更新窗口提供版本回退。
+
+sing-box 的默认大陆 SRS 规则每 24 小时后台更新，无需重启正在运行的连接；失败使用旧缓存。
+Xray DAT 随官方内核更新。自定义原生配置中的规则下载和更新由该配置及内核自身管理。
+
+## 官方文档
+
+- [Xray 路由](https://xtls.github.io/config/routing.html)
+- [sing-box 路由规则](https://sing-box.sagernet.org/configuration/route/rule/)
+- [sing-box 规则集](https://sing-box.sagernet.org/configuration/rule-set/)

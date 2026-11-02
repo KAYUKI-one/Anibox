@@ -42,6 +42,7 @@ import type {
   AppData,
   Core,
   CoreInfo,
+  CoreUpdate,
   LogEntry,
   NativeProfile,
   Page,
@@ -201,6 +202,15 @@ export default function App() {
   const [preview, setPreview] = useState<{ core: Core; config: string } | null>(null);
   const [closeOpen, setCloseOpen] = useState(false);
   const [cores, setCores] = useState<CoreInfo[]>([]);
+  const [coreUpdates, setCoreUpdates] = useState<CoreUpdate[]>([]);
+  const [updatesOpen, setUpdatesOpen] = useState(false);
+  const [updateNotice, setUpdateNotice] = useState(false);
+  const [checkingUpdates, setCheckingUpdates] = useState(false);
+  const [updatingCore, setUpdatingCore] = useState<Core | null>(null);
+  const [updateProgress, setUpdateProgress] = useState('');
+  const checkInFlight = useRef(false);
+  const coreChangeInFlight = useRef(false);
+  const notifiedUpdates = useRef('');
   const [runtime, setRuntime] = useState<RuntimeStatus>({ state: 'stopped' });
   const [busy, setBusy] = useState(false);
   const [refreshing, setRefreshing] = useState<string | null>(null);
@@ -322,6 +332,54 @@ export default function App() {
   useEffect(() => {
     void discover();
   }, [discover]);
+  const checkUpdates = useCallback(
+    async (force: boolean) => {
+      if (!desktop.available || checkInFlight.current || coreChangeInFlight.current) return;
+      checkInFlight.current = true;
+      setCheckingUpdates(true);
+      try {
+        const updates = await desktop.checkCoreUpdates(force);
+        setCoreUpdates(updates);
+        if (force) setUpdatesOpen(true);
+        else {
+          const signature = updates
+            .filter((item) => item.available)
+            .map((item) => `${item.core}:${item.latestVersion}`)
+            .join('|');
+          if (signature && signature !== notifiedUpdates.current) {
+            notifiedUpdates.current = signature;
+            setUpdateNotice(true);
+          }
+        }
+      } catch (error) {
+        if (force) notify(messageOf(error), 'error');
+      } finally {
+        checkInFlight.current = false;
+        setCheckingUpdates(false);
+      }
+    },
+    [notify],
+  );
+  useEffect(() => {
+    if (!desktop.available) return;
+    const startup = setTimeout(() => void checkUpdates(false), 45000);
+    const timer = setInterval(() => void checkUpdates(false), 6 * 3600000);
+    const progress = listen<{ core: Core; phase: string; downloaded: number; total: number }>(
+      'core-update-progress',
+      ({ payload }) => {
+        setUpdateProgress(
+          payload.phase === '下载中' && payload.total > 0
+            ? `下载中 ${Math.min(100, Math.floor((payload.downloaded / payload.total) * 100))}%`
+            : payload.phase,
+        );
+      },
+    );
+    return () => {
+      clearTimeout(startup);
+      clearInterval(timer);
+      void progress.then((unlisten) => unlisten());
+    };
+  }, [checkUpdates]);
   useEffect(() => {
     if (!desktop.available) return;
     let disposed = false;
@@ -369,6 +427,52 @@ export default function App() {
   const nodeDirty =
     nodeDraft !== nodeSavedDraft ||
     (data?.nodes.find((node) => node.id === editedNodeId)?.name ?? '') !== nodeName;
+  useEffect(() => {
+    if (
+      updateNotice &&
+      data &&
+      !dirty &&
+      !nodeDirty &&
+      !importOpen &&
+      !subscriptionOpen &&
+      !preview &&
+      !closeOpen
+    ) {
+      setUpdatesOpen(true);
+      setUpdateNotice(false);
+    }
+  }, [updateNotice, data, dirty, nodeDirty, importOpen, subscriptionOpen, preview, closeOpen]);
+  const changeCore = async (item: CoreUpdate, rollback = false) => {
+    if (updatingCore || busy || !data || checkInFlight.current || coreChangeInFlight.current) return;
+    coreChangeInFlight.current = true;
+    setUpdatingCore(item.core);
+    setUpdateProgress(rollback ? '回退中' : '准备中');
+    try {
+      let config: string | undefined;
+      let managed = false;
+      try {
+        const active = activeConfig(data);
+        if (active.core === item.core) {
+          config = active.config;
+          managed = !data.selectedProfileId;
+        }
+      } catch {
+        /* No selected configuration; the core's default check is sufficient. */
+      }
+      const next = rollback
+        ? await desktop.rollbackCore(item.core)
+        : await desktop.installCoreUpdate(item.core, item.latestVersion!, config, managed);
+      setCoreUpdates((current) => current.map((value) => (value.core === next.core ? next : value)));
+      await discover();
+      notify(running ? '内核已更换，重新连接后生效' : rollback ? '内核已回退' : '内核已更新', 'success');
+    } catch (error) {
+      notify(messageOf(error), 'error');
+    } finally {
+      coreChangeInFlight.current = false;
+      setUpdatingCore(null);
+      setUpdateProgress('');
+    }
+  };
   const guarded = (action: () => void) => {
     if (
       ((page === 'cores' && dirty) || (page === 'nodes' && nodeDirty)) &&
@@ -1062,7 +1166,12 @@ export default function App() {
                 <section className="glass core-discovery">
                   <div className="section-heading">
                     <h2>内核</h2>
-                    <IconButton icon={RefreshCw} label="重新检测内核" onClick={() => void discover()} />
+                    <IconButton
+                      icon={RefreshCw}
+                      label="检查内核更新"
+                      disabled={!desktop.available || checkingUpdates || !!updatingCore}
+                      onClick={() => void checkUpdates(true)}
+                    />
                   </div>
                   {(['xray', 'sing-box'] as Core[]).map((core) => {
                     const info = cores.find((item) => item.core === core);
@@ -1428,6 +1537,75 @@ export default function App() {
         </div>
       )}
       {importOpen && <ImportDialog onClose={() => setImportOpen(false)} onImport={importContent} />}
+      {updatesOpen && (
+        <Modal
+          title="内核更新"
+          onClose={() => {
+            if (!updatingCore) setUpdatesOpen(false);
+          }}
+        >
+          <div className="core-update-list">
+            {coreUpdates.map((item) => (
+              <div className="core-update-item" key={item.core}>
+                <div className="core-update-title">
+                  <strong>{coreLabel(item.core)}</strong>
+                  <span>
+                    {item.currentVersion ?? '未安装'}
+                    {item.available && ` → ${item.latestVersion}`}
+                  </span>
+                </div>
+                <div className="core-update-actions">
+                  {item.rollbackAvailable && (
+                    <button
+                      className="button quiet"
+                      disabled={!!updatingCore || busy || checkingUpdates}
+                      onClick={() => void changeCore(item, true)}
+                    >
+                      回退
+                    </button>
+                  )}
+                  <button
+                    className="button primary"
+                    disabled={!item.available || !!updatingCore || busy || checkingUpdates}
+                    onClick={() => void changeCore(item)}
+                  >
+                    {updatingCore === item.core ? (
+                      <>
+                        <LoaderCircle className="spin" size={14} />
+                        {updateProgress}
+                      </>
+                    ) : item.available ? (
+                      '更新'
+                    ) : item.error ? (
+                      '检查失败'
+                    ) : (
+                      '已是最新'
+                    )}
+                  </button>
+                </div>
+                {item.error && <p className="core-update-error">{item.error}</p>}
+              </div>
+            ))}
+          </div>
+          <div className="modal-footer">
+            <button
+              className="button quiet"
+              disabled={!!updatingCore || checkingUpdates}
+              onClick={() => void checkUpdates(true)}
+            >
+              <RefreshCw size={14} className={checkingUpdates ? 'spin' : ''} />
+              检查更新
+            </button>
+            <button
+              className="button outlined"
+              disabled={!!updatingCore}
+              onClick={() => setUpdatesOpen(false)}
+            >
+              关闭
+            </button>
+          </div>
+        </Modal>
+      )}
       {subscriptionOpen && (
         <SubscriptionDialog
           onClose={() => setSubscriptionOpen(false)}

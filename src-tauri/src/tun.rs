@@ -602,6 +602,12 @@ fn write_response(stream: &mut TcpStream, response: Response) -> Result<(), Stri
 }
 #[cfg(windows)]
 fn helper_core_path(core: Core) -> Result<PathBuf, String> {
+    if let Some(local) = std::env::var_os("LOCALAPPDATA") {
+        let root = PathBuf::from(local).join(env!("ANIBOX_APP_ID"));
+        if let Some(path) = crate::core_updates::installed_in(&root, core) {
+            return Ok(path);
+        }
+    }
     let own = std::env::current_exe().map_err(|e| e.to_string())?;
     let path = own
         .parent()

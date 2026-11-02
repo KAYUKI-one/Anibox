@@ -1180,6 +1180,35 @@ code {
 .spin {
   animation: spin 1.2s linear infinite;
 }
+.core-update-list {
+  display: grid;
+  gap: 12px;
+}
+.core-update-item {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 8px 16px;
+  padding: 14px 0;
+  border-bottom: 1px solid #9ab8cc33;
+}
+.core-update-title {
+  display: grid;
+  gap: 7px;
+}
+.core-update-title span {
+  color: #7895aa;
+  font-size: 12px;
+}
+.core-update-actions {
+  display: flex;
+  gap: 8px;
+}
+.core-update-error {
+  grid-column: 1 / -1;
+  color: #b16767;
+  font-size: 12px;
+}
 @keyframes spin {
   to {
     transform: rotate(360deg);

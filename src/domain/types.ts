@@ -67,6 +67,14 @@ export interface RuntimeStatus {
   startedAt?: string;
   message?: string;
 }
+export interface CoreUpdate {
+  core: Core;
+  currentVersion: string | null;
+  latestVersion: string | null;
+  available: boolean;
+  rollbackAvailable: boolean;
+  error: string | null;
+}
 export interface TrafficStats {
   available: boolean;
   uploadTotal: number;
@@ -95,6 +103,9 @@ export interface ImportResult {
 export interface DesktopBridge {
   available: boolean;
   discoverCores(): Promise<CoreInfo[]>;
+  checkCoreUpdates(force: boolean): Promise<CoreUpdate[]>;
+  installCoreUpdate(core: Core, version: string, config?: string, managed?: boolean): Promise<CoreUpdate>;
+  rollbackCore(core: Core): Promise<CoreUpdate>;
   validate(core: Core, config: string): Promise<string>;
   start(core: Core, config: string, mode: ConnectionMode, managed?: boolean): Promise<RuntimeStatus>;
   stop(): Promise<RuntimeStatus>;
