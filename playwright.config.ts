@@ -6,16 +6,16 @@ export default defineConfig({
   workers: 1,
   reporter: 'list',
   use: {
-    baseURL: 'http://127.0.0.1:1420',
+    baseURL: 'http://127.0.0.1:4173',
     channel: 'msedge',
     headless: true,
     viewport: { width: 1440, height: 1000 },
     screenshot: 'only-on-failure',
   },
   webServer: {
-    command: 'npm run dev',
-    url: 'http://127.0.0.1:1420',
-    reuseExistingServer: true,
+    command: 'npm run preview -- --port 4173 --strictPort',
+    url: 'http://127.0.0.1:4173',
+    reuseExistingServer: false,
     timeout: 30000,
   },
 });

@@ -1,7 +1,7 @@
 {
   "name": "anibox",
   "private": true,
-  "version": "0.3.0",
+  "version": "0.4.0",
   "type": "module",
   "scripts": {
     "dev": "vite --host 127.0.0.1",
@@ -14,9 +14,10 @@
     "desktop:build": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/desktop.ps1 -Build",
     "desktop:qa": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/desktop.ps1 -Build -QA",
     "setup:cores": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/setup-cores.ps1",
-    "test:ui": "playwright test",
+    "test:ui": "npm run build && playwright test",
     "test:desktop": "node scripts/smoke-desktop.mjs",
     "test:updates": "node scripts/check-core-updates.mjs",
+    "test:storage": "node scripts/check-storage.mjs",
     "format": "prettier --write src tests scripts/*.mjs *.json *.ts docs README.md THIRD_PARTY.md"
   },
   "dependencies": {

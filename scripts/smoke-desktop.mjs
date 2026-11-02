@@ -56,6 +56,8 @@ try {
   assert.equal((await invoke('runtime_status')).state, 'stopped', '测试需要一个未连接的实例');
   console.log('PASS native startup, IPC and packaged core discovery');
   if (process.env.ANIBOX_CHECK_WINDOW === '1') {
+    await invoke('plugin:window|show', { label: 'main' });
+    await page.waitForTimeout(250);
     console.log(
       execFileSync(
         'powershell',

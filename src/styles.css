@@ -102,7 +102,7 @@ code {
   display: flex;
   gap: 12px;
   padding: 10px;
-  background: #ffffff05;
+  background: rgb(255 255 255 / 0.035);
   min-width: 850px;
   min-height: 560px;
 }
@@ -911,6 +911,16 @@ code {
 }
 .settings-card > h2 {
   margin-bottom: 18px;
+}
+.storage-path {
+  font-size: 11px;
+  text-overflow: ellipsis;
+}
+.storage-card > .button {
+  margin-top: 10px;
+}
+.storage-card .button-pair {
+  flex-wrap: wrap;
 }
 .settings-detail {
   display: flex;

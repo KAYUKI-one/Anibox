@@ -34,6 +34,7 @@ export interface Subscription {
 }
 export interface PageAppearance {
   image?: string;
+  imageFile?: string;
   opacity: number;
   blur: number;
 }
@@ -59,6 +60,11 @@ export interface CoreInfo {
   version?: string;
   path?: string;
   error?: string;
+}
+export interface StorageInfo {
+  directory: string;
+  configFile: string;
+  backgroundDirectory: string;
 }
 export interface RuntimeStatus {
   state: 'stopped' | 'running' | 'error';
@@ -117,6 +123,14 @@ export interface DesktopBridge {
   fetchSubscription(url: string): Promise<string>;
   loadData(): Promise<string | null>;
   saveData(data: string): Promise<void>;
+  storageInfo(): Promise<StorageInfo>;
+  storeBackground(page: Page, data: string): Promise<string>;
+  loadBackground(name: string): Promise<string | null>;
+  resetBackgrounds(data: string, page?: Page): Promise<string>;
+  exportData(data: string): Promise<string>;
+  chooseStorageDirectory(): Promise<string | null>;
+  setStorageDirectory(directory: string, data: string): Promise<StorageInfo>;
+  openStorageFolder(folder: 'config' | 'backgrounds'): Promise<void>;
   setCloseBehavior(behavior: Settings['closeBehavior']): Promise<void>;
   close(action: 'tray' | 'exit'): Promise<void>;
 }

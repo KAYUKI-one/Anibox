@@ -15,6 +15,7 @@ import {
   FileCode2,
   FileInput,
   FileJson,
+  FolderOpen,
   Globe2,
   Home,
   ImagePlus,
@@ -50,6 +51,7 @@ import type {
   RuntimeStatus,
   TrafficStats,
   RuleStatus,
+  StorageInfo,
 } from './domain/types';
 import { appearanceFor, parseData, STORAGE_KEY } from './domain/storage';
 import { coreForNode, describeOutbound, mergeSubscriptionNodes, parseImport } from './domain/import';
@@ -191,6 +193,12 @@ function Modal({
 
 export default function App() {
   const [data, setData] = useState<AppData | null>(null);
+  const [storage, setStorage] = useState<StorageInfo | null>(null);
+  const [storageBusy, setStorageBusy] = useState(false);
+  const [loadedBackground, setLoadedBackground] = useState<{ key: string; value: string | null }>({
+    key: '',
+    value: null,
+  });
   const [loadError, setLoadError] = useState('');
   const [page, setPage] = useState<Page>('home');
   const [search, setSearch] = useState('');
@@ -247,6 +255,37 @@ export default function App() {
   }, []);
 
   useEffect(() => {
+    if (desktop.available)
+      desktop
+        .storageInfo()
+        .then(setStorage)
+        .catch(() => {});
+  }, []);
+  const imageFile = data?.settings.appearance[page]?.imageFile;
+  useEffect(() => {
+    if (!desktop.available || !imageFile) {
+      setLoadedBackground({ key: '', value: null });
+      return;
+    }
+    let disposed = false;
+    const refresh = () =>
+      desktop
+        .loadBackground(imageFile)
+        .then((value) => {
+          if (!disposed) setLoadedBackground({ key: imageFile, value });
+        })
+        .catch(() => {
+          if (!disposed) setLoadedBackground({ key: imageFile, value: null });
+        });
+    void refresh();
+    window.addEventListener('focus', refresh);
+    return () => {
+      disposed = true;
+      window.removeEventListener('focus', refresh);
+    };
+  }, [imageFile, storage?.directory]);
+
+  useEffect(() => {
     let disposed = false;
     (async () => {
       try {
@@ -272,6 +311,45 @@ export default function App() {
       })
       .catch((error) => notify(`保存失败：${messageOf(error)}`, 'error'));
   }, [data, notify]);
+
+  const resetBackground = async (target?: Page) => {
+    if (!data || storageBusy) return;
+    if (!desktop.available) {
+      const appearance = { ...data.settings.appearance };
+      for (const key of Object.keys(pageLabels) as Page[]) {
+        if (!target || key === target) appearance[key] = { opacity: 78, blur: 0 };
+      }
+      setData({ ...data, settings: { ...data.settings, appearance } });
+      return;
+    }
+    setStorageBusy(true);
+    try {
+      await persistenceQueue;
+      const raw = await desktop.resetBackgrounds(JSON.stringify(data), target);
+      setData(parseData(raw));
+      notify('已恢复默认背景', 'success');
+    } catch (error) {
+      notify(messageOf(error), 'error');
+    } finally {
+      setStorageBusy(false);
+    }
+  };
+  const changeStorage = async () => {
+    if (!data || storageBusy) return;
+    setStorageBusy(true);
+    try {
+      const directory = await desktop.chooseStorageDirectory();
+      if (!directory) return;
+      await persistenceQueue;
+      setStorage(await desktop.setStorageDirectory(directory, JSON.stringify(data)));
+      setData(parseData(await desktop.loadData()));
+      notify('存储目录已更改', 'success');
+    } catch (error) {
+      notify(messageOf(error), 'error');
+    } finally {
+      setStorageBusy(false);
+    }
+  };
 
   useEffect(() => {
     if (!data) return;
@@ -649,9 +727,9 @@ export default function App() {
     return (
       <div className="fatal">
         <Brand />
-        <h1>暂时无法读取工作区</h1>
+        <h1>无法读取配置</h1>
         <p>{loadError}</p>
-        <p>原有数据已保留，未自动覆盖。请检查桌面数据文件或浏览器存储。</p>
+        <p>请检查配置文件或存储目录。</p>
         <button className="button primary" onClick={() => location.reload()}>
           重新读取
         </button>
@@ -667,6 +745,8 @@ export default function App() {
     );
 
   const appearance = appearanceFor(data, page);
+  const backgroundImage =
+    appearance.image ?? (loadedBackground.key === appearance.imageFile ? loadedBackground.value : null);
   const visibleNodes = data.nodes.filter(
     (node) =>
       (filter === 'all' || node.core === filter) &&
@@ -726,8 +806,8 @@ export default function App() {
         <div
           className="page-background"
           style={
-            appearance.image
-              ? { backgroundImage: `url(${appearance.image})`, filter: `blur(${appearance.blur}px)` }
+            backgroundImage
+              ? { backgroundImage: `url(${backgroundImage})`, filter: `blur(${appearance.blur}px)` }
               : undefined
           }
         />
@@ -1326,7 +1406,7 @@ export default function App() {
             </section>
           )}
           {page === 'settings' && (
-            <div className="settings-grid">
+            <div className="settings-grid" inert={storageBusy}>
               <section className="glass settings-card">
                 <h2>外观</h2>
                 <label className="field-label" htmlFor="appearance-page">
@@ -1359,9 +1439,8 @@ export default function App() {
                   </button>
                   <button
                     className="button quiet"
-                    onClick={() =>
-                      updateAppearance({ image: undefined, blur: 0, opacity: 78 }, appearancePage)
-                    }
+                    disabled={storageBusy}
+                    onClick={() => void resetBackground(appearancePage)}
                   >
                     恢复默认
                   </button>
@@ -1392,6 +1471,71 @@ export default function App() {
                     }
                   />
                 </label>
+              </section>
+              <section className="glass settings-card storage-card">
+                <h2>文件目录</h2>
+                <label className="field-label" htmlFor="config-file-path">
+                  配置文件
+                </label>
+                <input
+                  id="config-file-path"
+                  className="text-input storage-path"
+                  readOnly
+                  value={storage?.configFile ?? '仅桌面版可用'}
+                  title={storage?.configFile}
+                />
+                <button
+                  className="button outlined"
+                  disabled={!desktop.available || storageBusy}
+                  onClick={() =>
+                    void desktop
+                      .openStorageFolder('config')
+                      .catch((error) => notify(messageOf(error), 'error'))
+                  }
+                >
+                  <FolderOpen size={15} />
+                  打开配置文件夹
+                </button>
+                <label className="field-label" htmlFor="background-directory-path">
+                  背景文件夹
+                </label>
+                <input
+                  id="background-directory-path"
+                  className="text-input storage-path"
+                  readOnly
+                  value={storage?.backgroundDirectory ?? '仅桌面版可用'}
+                  title={storage?.backgroundDirectory}
+                />
+                <div className="button-pair">
+                  <button
+                    className="button outlined"
+                    disabled={!desktop.available || storageBusy}
+                    onClick={() =>
+                      void desktop
+                        .openStorageFolder('backgrounds')
+                        .catch((error) => notify(messageOf(error), 'error'))
+                    }
+                  >
+                    <FolderOpen size={15} />
+                    打开背景文件夹
+                  </button>
+                  <button
+                    className="button quiet"
+                    disabled={storageBusy}
+                    onClick={() => void resetBackground()}
+                  >
+                    恢复全部默认
+                  </button>
+                </div>
+                <button
+                  className="button primary"
+                  disabled={!desktop.available || storageBusy}
+                  title="复制配置与背景至新目录，原文件保留"
+                  onClick={() => void changeStorage()}
+                >
+                  {storageBusy ? <LoaderCircle size={15} className="spin" /> : <FolderOpen size={15} />}
+                  {storageBusy ? '处理中' : '更改存储目录'}
+                </button>
               </section>
               <section className="glass settings-card">
                 <h2>窗口与端口</h2>
@@ -1476,7 +1620,17 @@ export default function App() {
                 <div className="button-pair">
                   <button
                     className="button outlined"
-                    onClick={() => downloadText('anibox-backup.json', JSON.stringify(data, null, 2))}
+                    disabled={storageBusy}
+                    onClick={async () => {
+                      try {
+                        const raw = desktop.available
+                          ? await desktop.exportData(JSON.stringify(data))
+                          : JSON.stringify(data, null, 2);
+                        downloadText('anibox-backup.json', raw);
+                      } catch (error) {
+                        notify(messageOf(error), 'error');
+                      }
+                    }}
                   >
                     <Download size={15} />
                     导出备份
@@ -1495,7 +1649,11 @@ export default function App() {
                           if (running) throw new Error('请先断开连接');
                           const next = parseData(await file.text());
                           if (window.confirm('用备份替换当前数据？')) {
-                            setData(next);
+                            if (desktop.available) {
+                              await persistenceQueue;
+                              await desktop.saveData(JSON.stringify(next));
+                              setData(parseData(await desktop.loadData()));
+                            } else setData(next);
                             notify('备份已恢复', 'success');
                           }
                         } catch (error) {
@@ -1518,8 +1676,16 @@ export default function App() {
             const file = event.target.files?.[0];
             event.target.value = '';
             if (!file) return;
+            if (storageBusy) return;
             try {
-              updateAppearance({ image: await readBackground(file) }, backgroundTarget.current);
+              const target = backgroundTarget.current;
+              const image = await readBackground(file);
+              if (desktop.available)
+                updateAppearance(
+                  { image: undefined, imageFile: await desktop.storeBackground(target, image) },
+                  target,
+                );
+              else updateAppearance({ image, imageFile: undefined }, target);
               notify('背景已更新', 'success');
             } catch (error) {
               notify(messageOf(error), 'error');

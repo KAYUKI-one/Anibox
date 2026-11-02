@@ -30,7 +30,7 @@ test('native profile keeps unknown fields and survives reload; editor is bundled
 }) => {
   const external: string[] = [];
   page.on('request', (request) => {
-    if (!request.url().startsWith('http://127.0.0.1:1420') && !request.url().startsWith('data:'))
+    if (!request.url().startsWith('http://127.0.0.1:4173') && !request.url().startsWith('data:'))
       external.push(request.url());
   });
   await page.goto('/');

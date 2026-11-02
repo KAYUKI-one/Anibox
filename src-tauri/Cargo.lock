@@ -43,8 +43,9 @@ dependencies = [
 
 [[package]]
 name = "anibox"
-version = "0.3.0"
+version = "0.4.0"
 dependencies = [
+ "base64 0.22.1",
  "flate2",
  "reqwest 0.12.28",
  "serde",
@@ -54,6 +55,7 @@ dependencies = [
  "tauri-build",
  "tauri-plugin-single-instance",
  "tokio",
+ "windows",
  "windows-sys 0.61.2",
  "winreg 0.55.0",
  "zip",

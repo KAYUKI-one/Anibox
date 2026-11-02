@@ -4,9 +4,9 @@ mod core_updates;
 mod process_job;
 mod proxy;
 mod rules;
+mod storage;
 mod traffic;
 mod tun;
-mod window_effects;
 
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -759,44 +759,6 @@ async fn fetch_subscription(url: String) -> Result<String, String> {
 }
 
 #[tauri::command]
-fn load_data(app: tauri::AppHandle) -> Result<Option<String>, String> {
-    let path = app_dir(&app)?.join("workspace.json");
-    if !path.exists() {
-        return Ok(None);
-    }
-    fs::read_to_string(path)
-        .map(Some)
-        .map_err(|e| e.to_string())
-}
-#[tauri::command]
-fn save_data(app: tauri::AppHandle, data: String) -> Result<(), String> {
-    let state = app.state::<AppState>();
-    let _lock = state.storage.lock().map_err(|_| "保存队列不可用")?;
-    if data.len() > 32 * 1024 * 1024 {
-        return Err("工作区数据超过 32 MB，请减少背景图片大小".into());
-    }
-    let _: Value = serde_json::from_str(&data).map_err(|e| e.to_string())?;
-    let dir = app_dir(&app)?;
-    let temporary = dir.join("workspace.next.json");
-    fs::write(&temporary, data).map_err(|e| e.to_string())?;
-    let destination = dir.join("workspace.json");
-    match fs::rename(&temporary, &destination) {
-        Ok(()) => Ok(()),
-        // Redirected Windows profiles and virtual filesystems may report EXDEV even for sibling paths.
-        // Keep a recovery copy before using a non-atomic write on these filesystems.
-        Err(error) if error.raw_os_error() == Some(17) => {
-            if destination.exists() {
-                fs::copy(&destination, dir.join("workspace.previous.json"))
-                    .map_err(|e| e.to_string())?;
-            }
-            fs::copy(&temporary, &destination).map_err(|e| e.to_string())?;
-            fs::remove_file(&temporary).map_err(|e| e.to_string())?;
-            Ok(())
-        }
-        Err(error) => Err(error.to_string()),
-    }
-}
-#[tauri::command]
 fn set_close_behavior(behavior: String) -> Result<(), String> {
     if !["ask", "tray", "exit"].contains(&behavior.as_str()) {
         return Err("关闭行为无效".into());
@@ -848,10 +810,6 @@ fn main() {
         }))
         .manage(AppState::default())
         .setup(|app| {
-            #[cfg(windows)]
-            if let Some(window) = app.get_webview_window("main") {
-                window_effects::apply(&window);
-            }
             let _ = rules::ensure(app.handle());
             proxy::restore(&journal(app.handle()).map_err(std::io::Error::other)?)
                 .map_err(std::io::Error::other)?;
@@ -924,8 +882,16 @@ fn main() {
             stop_core,
             runtime_status,
             fetch_subscription,
-            load_data,
-            save_data,
+            storage::load_data,
+            storage::save_data,
+            storage::storage_info,
+            storage::store_background,
+            storage::load_background,
+            storage::reset_backgrounds,
+            storage::export_data,
+            storage::choose_storage_directory,
+            storage::set_storage_directory,
+            storage::open_storage_folder,
             set_close_behavior,
             close_app,
             traffic_stats,
