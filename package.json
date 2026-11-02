@@ -1,0 +1,41 @@
+{
+  "name": "anibox",
+  "private": true,
+  "version": "0.2.1",
+  "type": "module",
+  "scripts": {
+    "dev": "vite --host 127.0.0.1",
+    "build": "tsc -b && vite build",
+    "preview": "vite preview --host 127.0.0.1",
+    "test": "vitest run",
+    "test:cores": "node scripts/check-cores.mjs",
+    "tauri": "tauri",
+    "desktop": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/desktop.ps1",
+    "desktop:build": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/desktop.ps1 -Build",
+    "desktop:qa": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/desktop.ps1 -Build -QA",
+    "setup:cores": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/setup-cores.ps1",
+    "test:ui": "playwright test",
+    "test:desktop": "node scripts/smoke-desktop.mjs",
+    "format": "prettier --write src tests scripts/*.mjs *.json *.ts docs README.md THIRD_PARTY.md"
+  },
+  "dependencies": {
+    "@monaco-editor/react": "^4.7.0",
+    "@tauri-apps/api": "^2.0.0",
+    "lucide-react": "^0.468.0",
+    "monaco-editor": "^0.52.0",
+    "react": "^19.0.0",
+    "react-dom": "^19.0.0"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.56.0",
+    "@tauri-apps/cli": "^2.0.0",
+    "@types/node": "^22.0.0",
+    "@types/react": "^19.0.0",
+    "@types/react-dom": "^19.0.0",
+    "@vitejs/plugin-react": "^4.3.4",
+    "prettier": "^3.9.10",
+    "typescript": "~5.7.3",
+    "vite": "^6.0.0",
+    "vitest": "^5.0.5"
+  }
+}

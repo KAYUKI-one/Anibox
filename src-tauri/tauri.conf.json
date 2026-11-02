@@ -1,0 +1,53 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "Anibox",
+  "version": "0.2.1",
+  "identifier": "io.anibox.desktop",
+  "build": {
+    "beforeDevCommand": "npm run dev",
+    "beforeBuildCommand": "npm run build",
+    "devUrl": "http://localhost:1420",
+    "frontendDist": "../dist"
+  },
+  "app": {
+    "windows": [
+      {
+        "label": "main",
+        "title": "Anibox",
+        "width": 1200,
+        "height": 760,
+        "minWidth": 900,
+        "minHeight": 620,
+        "decorations": false,
+        "transparent": true,
+        "backgroundColor": "#00000000",
+        "theme": "Light",
+        "center": true,
+        "dragDropEnabled": false
+      }
+    ],
+    "security": {
+      "csp": "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self' data:; worker-src 'self' blob:; connect-src ipc: http://ipc.localhost"
+    }
+  },
+  "bundle": {
+    "active": true,
+    "targets": ["nsis"],
+    "icon": ["icons/icon.ico"],
+    "resources": {
+      "../Xray-windows-64/xray.exe": "cores/xray/xray.exe",
+      "../Xray-windows-64/wintun.dll": "cores/xray/wintun.dll",
+      "../Xray-windows-64/geoip.dat": "cores/xray/geoip.dat",
+      "../Xray-windows-64/geosite.dat": "cores/xray/geosite.dat",
+      "../Xray-windows-64/LICENSE": "cores/xray/LICENSE",
+      "../Xray-windows-64/LICENSE-Wintun": "cores/xray/LICENSE-Wintun",
+      "../sing-box-1.14.4-windows-amd64/sing-box.exe": "cores/sing-box/sing-box.exe",
+      "../sing-box-1.14.4-windows-amd64/libcronet.dll": "cores/sing-box/libcronet.dll",
+      "../sing-box-1.14.4-windows-amd64/LICENSE": "cores/sing-box/LICENSE",
+      "../assets/rules/geosite-cn.srs": "rules/seed/geosite-cn.srs",
+      "../assets/rules/geoip-cn.srs": "rules/seed/geoip-cn.srs",
+      "../assets/tun/wintun.dll": "cores/sing-box/wintun.dll",
+      "../assets/tun/LICENSE-Wintun": "cores/sing-box/LICENSE-Wintun"
+    }
+  }
+}
