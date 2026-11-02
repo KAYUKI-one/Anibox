@@ -98,13 +98,20 @@ code {
   background: transparent;
 }
 .app-shell {
+  --window-radius: 32px;
   height: 100dvh;
   display: flex;
   gap: 12px;
   padding: 10px;
   background: rgb(255 255 255 / 0.035);
+  border-radius: var(--window-radius);
+  clip-path: inset(0 round var(--window-radius));
+  overflow: hidden;
   min-width: 850px;
   min-height: 560px;
+}
+.app-shell.maximized {
+  --window-radius: 0px;
 }
 .browser-preview {
   background: #e5ebef;
@@ -186,13 +193,22 @@ code {
 }
 .page-background {
   position: absolute;
-  inset: -30px;
+  inset: 0;
   z-index: -1;
   background: linear-gradient(130deg, #f0f8fc, #dfedf8 80%);
   background-position: center;
   background-size: cover;
+  overflow: hidden;
+  pointer-events: none;
+}
+.page-background-image {
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
 }
 .titlebar {
+  background: rgb(255 255 255 / 0.7);
   height: 46px;
   flex-shrink: 0;
   padding: 0 20px;
@@ -204,7 +220,7 @@ code {
 }
 .titlebar > h1 {
   pointer-events: none;
-  color: #5a7a93;
+  color: #264357;
 }
 .titlebar-actions {
   display: flex;
@@ -249,9 +265,43 @@ code {
 .glass {
   border: 1px solid #ffffffc9;
   border-radius: 14px;
-  background: rgb(255 255 255 / var(--surface-opacity, 0.78));
+  background: rgb(255 255 255 / var(--surface-opacity, 0.54));
   box-shadow: 0 2px 12px #718fa905;
-  backdrop-filter: blur(14px);
+  backdrop-filter: blur(5px);
+}
+.glass {
+  color: #29475d;
+}
+.connection-panel,
+.settings-card,
+.editor-tools,
+.saved-profiles,
+.core-discovery,
+.status-strip {
+  background: rgb(255 255 255 / max(var(--surface-opacity, 0.54), 0.72));
+}
+.proxy-panel > .section-heading,
+.list-toolbar {
+  background: rgb(255 255 255 / 0.55);
+}
+.proxy-panel > .section-heading {
+  margin-bottom: 0;
+  padding-bottom: 13px;
+}
+.proxy-row {
+  background: rgb(255 255 255 / 0.64);
+}
+.subscription-row,
+.event-row {
+  background: rgb(255 255 255 / 0.62);
+}
+.empty-state > span {
+  background: #ffffffbd;
+  padding: 5px 10px;
+  border-radius: 6px;
+}
+.empty-state .button {
+  background: #ffffffc9;
 }
 .status-strip {
   height: 54px;
@@ -779,7 +829,34 @@ code {
   flex: 1;
   min-height: 0;
   overflow: hidden;
-  background: #f8fbfe;
+  background: rgb(255 255 255 / max(var(--surface-opacity, 0.54), 0.84));
+}
+.appearance-preview {
+  position: relative;
+  isolation: isolate;
+  width: 100%;
+  max-width: 340px;
+  margin: 16px auto 0;
+  border: 1px solid #ffffffb0;
+  border-radius: 10px;
+  overflow: hidden;
+  display: grid;
+  place-items: center;
+}
+.preview-sample {
+  width: 72%;
+  min-height: 100px;
+  padding: 12px;
+  display: grid;
+  gap: 9px;
+  color: #29475d;
+  font-size: 12px;
+}
+.preview-control {
+  padding: 5px 8px;
+  border: 1px solid #dce7ef;
+  border-radius: 5px;
+  background: #ffffffe0;
 }
 .editor-loading {
   height: 100%;
@@ -1223,6 +1300,40 @@ code {
   to {
     transform: rotate(360deg);
   }
+}
+.glass .state-badge:not(.online),
+.glass .current-core,
+.glass .traffic-readout,
+.glass .field-label,
+.glass .connection-details,
+.glass .empty-state,
+.glass .node-description > span,
+.glass .settings-detail,
+.glass .settings-detail > span:last-child,
+.glass .slider-label,
+.glass .tool-row,
+.glass .subscription-description span,
+.glass .subscription-description small,
+.glass .event-row,
+.glass .select-wrap select {
+  color: #314b60;
+}
+.glass .core-chip {
+  color: #4b6780;
+}
+.glass .button.outlined,
+.glass .button.quiet {
+  color: #314b60;
+}
+.titlebar .icon-button {
+  color: #3e5c72;
+}
+.glass .state-badge.online,
+.glass .event-row.success {
+  color: #337b68;
+}
+.glass .event-row.error {
+  color: #9d4157;
 }
 @media (max-width: 1050px) {
   .app-shell {

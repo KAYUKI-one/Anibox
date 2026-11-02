@@ -14,11 +14,12 @@ monaco.editor.defineTheme('anibox', {
   inherit: true,
   rules: [
     { token: 'string.key.json', foreground: '436283' },
-    { token: 'string.value.json', foreground: '268B8A' },
-    { token: 'number', foreground: 'A9753C' },
+    { token: 'string.value.json', foreground: '18716F' },
+    { token: 'number', foreground: '875323' },
   ],
   colors: {
-    'editor.background': '#F8FBFE',
+    'editor.background': '#00000000',
+    'editorGutter.background': '#00000000',
     'editor.lineHighlightBackground': '#EAF3FA',
     'editorLineNumber.foreground': '#B1BDCB',
     'editor.selectionBackground': '#D2EAF9',

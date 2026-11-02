@@ -37,8 +37,11 @@ export interface PageAppearance {
   imageFile?: string;
   opacity: number;
   blur: number;
+  focusMode?: 'auto' | 'manual';
+  focus?: { x: number; y: number };
 }
 export interface Settings {
+  appearanceVersion?: number;
   port: number;
   closeBehavior: 'ask' | 'tray' | 'exit';
   appearance: Partial<Record<Page, PageAppearance>>;

@@ -21,6 +21,11 @@ public static class AniboxWindowCheck {
     [DllImport("user32.dll")] static extern bool SetWindowPos(IntPtr hwnd, IntPtr after, int x, int y, int width, int height, uint flags);
     [DllImport("user32.dll")] static extern bool ShowWindow(IntPtr hwnd, int command);
     [DllImport("user32.dll")] static extern bool SetProcessDPIAware();
+    [DllImport("user32.dll")] static extern IntPtr SetThreadDpiAwarenessContext(IntPtr context);
+    [DllImport("gdi32.dll")] static extern IntPtr CreateRectRgn(int left,int top,int right,int bottom);
+    [DllImport("user32.dll")] static extern int GetWindowRgn(IntPtr window,IntPtr region);
+    [DllImport("gdi32.dll")] static extern bool PtInRegion(IntPtr region,int x,int y);
+    [DllImport("gdi32.dll")] static extern bool DeleteObject(IntPtr region);
     [DllImport("user32.dll")] static extern IntPtr GetDC(IntPtr hwnd);
     [DllImport("user32.dll")] static extern int ReleaseDC(IntPtr hwnd, IntPtr dc);
     [DllImport("gdi32.dll")] static extern uint GetPixel(IntPtr dc, int x, int y);
@@ -44,6 +49,7 @@ public static class AniboxWindowCheck {
     static void Frame() { Application.DoEvents(); DwmFlush(); Thread.Sleep(45); }
     public static string Check(int processId) {
         SetProcessDPIAware();
+        SetThreadDpiAwarenessContext(new IntPtr(-4));
         IntPtr window = IntPtr.Zero;
         EnumWindows((hwnd, parameter) => {
             uint owner; GetWindowThreadProcessId(hwnd, out owner);
@@ -63,33 +69,51 @@ public static class AniboxWindowCheck {
             backdrop.FormBorderStyle=FormBorderStyle.None;
             backdrop.ShowInTaskbar=false; backdrop.TopMost=true;
             backdrop.StartPosition=FormStartPosition.Manual;
-            backdrop.Bounds=new Rectangle(20,20,original.right-original.left+120,original.bottom-original.top+120);
+            backdrop.Bounds=new Rectangle(0,0,original.right-original.left+240,original.bottom-original.top+240);
             backdrop.BackColor=Color.FromArgb(35,120,210);
             try {
-                backdrop.Show();
-                SetWindowPos(backdrop.Handle,new IntPtr(-1),20,20,0,0,0x51); Frame();
-                Color backdropBlue=Sample(backdrop.Handle,5,5);
-                SetWindowPos(window,new IntPtr(-1),40,40,0,0,0x51);
-                SetWindowPos(backdrop.Handle,window,20,20,0,0,0x11);
+                backdrop.Show(); backdrop.Refresh();
+                SetWindowPos(backdrop.Handle,new IntPtr(-1),0,0,0,0,0x51); Frame();
+                Color backdropBlue=Sample(backdrop.Handle,100,100);
+                SetWindowPos(window,new IntPtr(-1),160,160,0,0,0x51);
+                SetWindowPos(backdrop.Handle,window,0,0,0,0,0x11);
                 Frame();
                 Color sidebar=Sample(window,40,100);
-                if(sidebar.B>110 || sidebar.G>110) throw new Exception("QA content is not visible: "+sidebar+" backdrop="+backdropBlue);
+                if(sidebar.B>110 || sidebar.G>110 || sidebar.B-sidebar.R<12 || sidebar.G-sidebar.R<6) throw new Exception("QA content is not visible: "+sidebar+" backdrop="+backdropBlue);
                 Color blue=Sample(window,90,80);
-                backdrop.BackColor=Color.FromArgb(215,70,85); Frame();
-                Color backdropPink=Sample(backdrop.Handle,5,5);
+                Color blueCorner=Sample(window,1,1);
+                var origin=new Point(0,0); ClientToScreen(window,ref origin);
+                Rect current; GetWindowRect(window,out current);
+                IntPtr region=CreateRectRgn(0,0,0,0); int regionType=GetWindowRgn(window,region);
+                bool cornerInside=PtInRegion(region,origin.X-current.left+1,origin.Y-current.top+1);
+                DeleteObject(region);
+                if(regionType!=3 || cornerInside || Math.Abs(blueCorner.R-35)>8 || Math.Abs(blueCorner.G-120)>8 || Math.Abs(blueCorner.B-210)>8)
+                    throw new Exception("The outer corner is not clipped to a transparent round: "+blueCorner+" backdrop="+backdropBlue+" region="+regionType+" included="+cornerInside+" client="+origin+" bounds="+current.left+","+current.top+" dpi="+GetDpiForWindow(window));
+                backdrop.BackColor=Color.FromArgb(215,70,85); backdrop.Refresh(); Frame();
+                Color backdropPink=Sample(backdrop.Handle,100,100);
                 Color pink=Sample(window,90,80);
                 if(pink.R-blue.R<140 || blue.B-pink.B<90)
                     throw new Exception("Outer glass is tinted/opaque: blue="+blue+", pink="+pink+", known backdrop="+backdropBlue+"/"+backdropPink+", sidebar="+sidebar);
                 for(int i=0;i<16;i++) {
-                    SetWindowPos(window,new IntPtr(-1),40+(i%4)*12,40+(i%3)*8,0,0,0x11);
+                    SetWindowPos(window,new IntPtr(-1),160+(i%4)*12,160+(i%3)*8,0,0,0x11);
                     Frame();
                     Color moved=Sample(window,90,80);
                     if(moved.R<170 || moved.G>110 || moved.B>125) throw new Exception("Transparency was lost while moving: "+moved);
                 }
-                return "PASS actual background transmission (blue="+blue+", pink="+pink+"), 16 transparent window moves in "+watch.ElapsedMilliseconds+" ms";
+                for(int i=0;i<4;i++) {
+                    SetWindowPos(window,new IntPtr(-1),160,160,original.right-original.left+20*(i+1),original.bottom-original.top+16*(i+1),0x10);
+                    Frame();
+                    region=CreateRectRgn(0,0,0,0);
+                    regionType=GetWindowRgn(window,region);
+                    bool centerInside=PtInRegion(region,100,100);
+                    bool outerInside=PtInRegion(region,1,1);
+                    DeleteObject(region);
+                    if(regionType!=3 || outerInside || !centerInside) throw new Exception("Rounded window region was lost on resize");
+                }
+                return "PASS rounded transparent corner, 4 resizes, background transmission (blue="+blue+", pink="+pink+"), 16 transparent window moves in "+watch.ElapsedMilliseconds+" ms";
             } finally {
                 ShowWindow(window,0);
-                SetWindowPos(window,new IntPtr(-2),original.left,original.top,0,0,0x11);
+                SetWindowPos(window,new IntPtr(-2),original.left,original.top,original.right-original.left,original.bottom-original.top,0x10);
                 backdrop.Close();
             }
         }

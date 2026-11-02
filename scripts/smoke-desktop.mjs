@@ -74,6 +74,13 @@ try {
       ).trim(),
     );
   }
+  if (process.env.ANIBOX_CHECK_WINDOW) {
+    await invoke('plugin:window|toggle_maximize', { label: 'main' });
+    await page.waitForFunction(() => document.querySelector('.app-shell')?.classList.contains('maximized'));
+    await invoke('plugin:window|toggle_maximize', { label: 'main' });
+    await page.waitForFunction(() => !document.querySelector('.app-shell')?.classList.contains('maximized'));
+    console.log('PASS maximize and restore rounded frame');
+  }
   const originalData = await invoke('load_data');
   const roundtripData =
     originalData ??

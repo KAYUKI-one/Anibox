@@ -7,6 +7,7 @@ mod rules;
 mod storage;
 mod traffic;
 mod tun;
+mod window_shape;
 
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -810,6 +811,10 @@ fn main() {
         }))
         .manage(AppState::default())
         .setup(|app| {
+            #[cfg(windows)]
+            if let Some(window) = app.get_webview_window("main") {
+                window_shape::apply(&window.as_ref().window());
+            }
             let _ = rules::ensure(app.handle());
             proxy::restore(&journal(app.handle()).map_err(std::io::Error::other)?)
                 .map_err(std::io::Error::other)?;
@@ -870,6 +875,13 @@ fn main() {
             Ok(())
         })
         .on_window_event(|window, event| {
+            #[cfg(windows)]
+            if matches!(
+                event,
+                tauri::WindowEvent::Resized(_) | tauri::WindowEvent::ScaleFactorChanged { .. }
+            ) {
+                window_shape::apply(window);
+            }
             if let tauri::WindowEvent::CloseRequested { api, .. } = event {
                 api.prevent_close();
                 let _ = window.emit("close-requested", ());

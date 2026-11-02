@@ -58,6 +58,9 @@ import { coreForNode, describeOutbound, mergeSubscriptionNodes, parseImport } fr
 import { activeConfig, nativeStarter, validateObject } from './domain/config';
 import { desktop } from './services/desktop';
 import { downloadText, readBackground } from './services/files';
+import { useBackground } from './services/useBackground';
+import PageBackground, { AppearancePreview } from './components/PageBackground';
+import { DEFAULT_OPACITY, MIN_OPACITY } from './domain/appearance';
 
 const JsonEditor = lazy(() => import('./components/JsonEditor'));
 const pageLabels: Record<Page, string> = {
@@ -195,10 +198,7 @@ export default function App() {
   const [data, setData] = useState<AppData | null>(null);
   const [storage, setStorage] = useState<StorageInfo | null>(null);
   const [storageBusy, setStorageBusy] = useState(false);
-  const [loadedBackground, setLoadedBackground] = useState<{ key: string; value: string | null }>({
-    key: '',
-    value: null,
-  });
+  const [maximized, setMaximized] = useState(false);
   const [loadError, setLoadError] = useState('');
   const [page, setPage] = useState<Page>('home');
   const [search, setSearch] = useState('');
@@ -261,29 +261,25 @@ export default function App() {
         .then(setStorage)
         .catch(() => {});
   }, []);
-  const imageFile = data?.settings.appearance[page]?.imageFile;
+  const backgroundImage = useBackground(data?.settings.appearance[page], storage?.directory);
   useEffect(() => {
-    if (!desktop.available || !imageFile) {
-      setLoadedBackground({ key: '', value: null });
-      return;
-    }
+    if (!desktop.available) return;
     let disposed = false;
+    const window = getCurrentWindow();
     const refresh = () =>
-      desktop
-        .loadBackground(imageFile)
+      window
+        .isMaximized()
         .then((value) => {
-          if (!disposed) setLoadedBackground({ key: imageFile, value });
+          if (!disposed) setMaximized(value);
         })
-        .catch(() => {
-          if (!disposed) setLoadedBackground({ key: imageFile, value: null });
-        });
+        .catch(() => {});
     void refresh();
-    window.addEventListener('focus', refresh);
+    const unlisten = window.onResized(refresh);
     return () => {
       disposed = true;
-      window.removeEventListener('focus', refresh);
+      void unlisten.then((stop) => stop());
     };
-  }, [imageFile, storage?.directory]);
+  }, []);
 
   useEffect(() => {
     let disposed = false;
@@ -317,7 +313,7 @@ export default function App() {
     if (!desktop.available) {
       const appearance = { ...data.settings.appearance };
       for (const key of Object.keys(pageLabels) as Page[]) {
-        if (!target || key === target) appearance[key] = { opacity: 78, blur: 0 };
+        if (!target || key === target) appearance[key] = { opacity: DEFAULT_OPACITY, blur: 0 };
       }
       setData({ ...data, settings: { ...data.settings, appearance } });
       return;
@@ -745,8 +741,6 @@ export default function App() {
     );
 
   const appearance = appearanceFor(data, page);
-  const backgroundImage =
-    appearance.image ?? (loadedBackground.key === appearance.imageFile ? loadedBackground.value : null);
   const visibleNodes = data.nodes.filter(
     (node) =>
       (filter === 'all' || node.core === filter) &&
@@ -772,7 +766,9 @@ export default function App() {
     }));
 
   return (
-    <div className={`app-shell ${desktop.available ? 'desktop' : 'browser-preview'}`}>
+    <div
+      className={`app-shell ${desktop.available ? 'desktop' : 'browser-preview'} ${maximized ? 'maximized' : ''}`}
+    >
       <aside className="sidebar">
         <button
           className="brand-button"
@@ -803,13 +799,11 @@ export default function App() {
         </button>
       </aside>
       <main className="main-panel" style={{ '--surface-opacity': appearance.opacity / 100 } as CSSProperties}>
-        <div
-          className="page-background"
-          style={
-            backgroundImage
-              ? { backgroundImage: `url(${backgroundImage})`, filter: `blur(${appearance.blur}px)` }
-              : undefined
-          }
+        <PageBackground
+          image={backgroundImage}
+          blur={appearance.blur}
+          focus={appearance.focus}
+          focusMode={appearance.focusMode}
         />
         <header className="titlebar" data-tauri-drag-region>
           <h1>{pageLabels[page]}</h1>
@@ -1450,7 +1444,7 @@ export default function App() {
                   <input
                     aria-label="卡片不透明度"
                     type="range"
-                    min="35"
+                    min={MIN_OPACITY}
                     max="100"
                     value={settingsAppearance.opacity}
                     onChange={(event) =>
@@ -1458,6 +1452,56 @@ export default function App() {
                     }
                   />
                 </label>
+                <AppearancePreview appearance={settingsAppearance} directory={storage?.directory} />
+                {(settingsAppearance.image || settingsAppearance.imageFile) && (
+                  <>
+                    <label className="field-label" htmlFor="background-focus-mode">
+                      背景对焦
+                    </label>
+                    <div className="select-wrap">
+                      <select
+                        id="background-focus-mode"
+                        value={settingsAppearance.focusMode ?? 'auto'}
+                        onChange={(event) =>
+                          updateAppearance(
+                            { focusMode: event.target.value as 'auto' | 'manual' },
+                            appearancePage,
+                          )
+                        }
+                      >
+                        <option value="auto">自动</option>
+                        <option value="manual">手动</option>
+                      </select>
+                      <ChevronDown size={14} />
+                    </div>
+                    {settingsAppearance.focusMode === 'manual' &&
+                      (['x', 'y'] as const).map((axis) => (
+                        <label className="slider-label" key={axis}>
+                          {axis === 'x' ? '水平焦点' : '垂直焦点'}
+                          <span>{Math.round((settingsAppearance.focus?.[axis] ?? 0.5) * 100)}%</span>
+                          <input
+                            type="range"
+                            aria-label={axis === 'x' ? '水平焦点' : '垂直焦点'}
+                            min="0"
+                            max="100"
+                            value={Math.round((settingsAppearance.focus?.[axis] ?? 0.5) * 100)}
+                            onChange={(event) =>
+                              updateAppearance(
+                                {
+                                  focus: {
+                                    x: settingsAppearance.focus?.x ?? 0.5,
+                                    y: settingsAppearance.focus?.y ?? 0.5,
+                                    [axis]: Number(event.target.value) / 100,
+                                  },
+                                },
+                                appearancePage,
+                              )
+                            }
+                          />
+                        </label>
+                      ))}
+                  </>
+                )}
                 <label className="slider-label">
                   背景模糊<span>{settingsAppearance.blur}px</span>
                   <input
@@ -1682,10 +1726,19 @@ export default function App() {
               const image = await readBackground(file);
               if (desktop.available)
                 updateAppearance(
-                  { image: undefined, imageFile: await desktop.storeBackground(target, image) },
+                  {
+                    image: undefined,
+                    imageFile: await desktop.storeBackground(target, image),
+                    focusMode: 'auto',
+                    focus: undefined,
+                  },
                   target,
                 );
-              else updateAppearance({ image, imageFile: undefined }, target);
+              else
+                updateAppearance(
+                  { image, imageFile: undefined, focusMode: 'auto', focus: undefined },
+                  target,
+                );
               notify('背景已更新', 'success');
             } catch (error) {
               notify(messageOf(error), 'error');

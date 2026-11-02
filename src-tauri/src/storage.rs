@@ -282,7 +282,9 @@ fn clear_images(value: &mut Value, page: Option<&str>) {
                 if let Some(a) = appearance.as_object_mut() {
                     a.remove("image");
                     a.remove("imageFile");
-                    a.insert("opacity".into(), 78.into());
+                    a.insert("opacity".into(), 54.into());
+                    a.remove("focus");
+                    a.remove("focusMode");
                     a.insert("blur".into(), 0.into());
                 }
             }

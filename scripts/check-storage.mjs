@@ -105,9 +105,7 @@ try {
   const homeFile = migrated.settings.appearance.home.imageFile;
   assert.equal(await invoke('load_background', { name: homeFile }), photo);
   assert(existsSync(path.join(directoryA, 'backgrounds', homeFile)));
-  await expect
-    .poll(() => page.locator('.page-background').evaluate((el) => el.style.backgroundImage))
-    .toContain('data:image/png');
+  await expect(page.locator('.main-panel > .page-background img')).toHaveAttribute('src', /data:image\/png/);
   console.log('PASS legacy embedded backgrounds migrate to independent files; native JSON is preserved');
   const portable = JSON.parse(await invoke('export_data', { data: raw }));
   assert.equal(portable.settings.appearance.home.image, photo);
@@ -150,9 +148,7 @@ try {
   await unlink(path.join(directoryB, 'backgrounds', homeFile));
   await page.getByRole('button', { name: '主界面', exact: true }).click();
   await page.evaluate(() => window.dispatchEvent(new Event('focus')));
-  await expect
-    .poll(() => page.locator('.page-background').evaluate((el) => el.style.backgroundImage))
-    .toBe('');
+  await expect(page.locator('.main-panel > .page-background img')).toHaveCount(0);
   console.log(
     'PASS existing destinations are preserved; deleted image files fall back to the default background',
   );
