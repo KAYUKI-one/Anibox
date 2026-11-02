@@ -583,7 +583,9 @@ export default function App() {
         notify('代理已停止', 'success');
       } else {
         const target = activeConfig(data);
-        setRuntime(await desktop.start(target.core, target.config, data.mode, !data.selectedProfileId));
+        const status = await desktop.start(target.core, target.config, data.mode, !data.selectedProfileId);
+        setRuntime(status);
+        if (status.message) notify(status.message);
         notify(`${coreLabel(target.core)} 已启动 · ${target.name}`, 'success');
       }
     } catch (error) {
@@ -1022,11 +1024,19 @@ export default function App() {
                       <>
                         <div>
                           <span>SOCKS</span>
-                          <code>127.0.0.1:{data.settings.port}</code>
+                          <code>
+                            127.0.0.1:
+                            {running ? (runtime.localPorts?.socks ?? data.settings.port) : data.settings.port}
+                          </code>
                         </div>
                         <div>
                           <span>HTTP</span>
-                          <code>127.0.0.1:{data.settings.port + 1}</code>
+                          <code>
+                            127.0.0.1:
+                            {running
+                              ? (runtime.localPorts?.http ?? data.settings.port + 1)
+                              : data.settings.port + 1}
+                          </code>
                         </div>
                       </>
                     )}

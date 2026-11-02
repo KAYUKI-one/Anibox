@@ -1,5 +1,5 @@
 // Core traffic targets loopback only. Rule updates use the documented public provider.
-// No system proxy, DNS, or global route settings are changed.
+// System proxy roundtrips and route-free TUN driver checks are explicit opt-ins.
 import { chromium } from '@playwright/test';
 import { spawn, execFileSync } from 'node:child_process';
 import { createServer as createHttpServer, request } from 'node:http';
@@ -26,6 +26,7 @@ const app = spawn(executable, [], {
 app.on('error', (error) => console.error(error.message));
 let browser, page;
 const target = createHttpServer((_req, res) => res.end('ANIBOX_LOOPBACK_OK'));
+let blocker;
 try {
   for (let attempt = 0; attempt < 100; attempt++) {
     if (app.exitCode !== null) throw new Error('应用提前退出；请确认已有实例已退出。');
@@ -55,7 +56,7 @@ try {
   assert(discovered.length === 2 && discovered.every((core) => core.available), '打包后的两种内核都应可检测');
   assert.equal((await invoke('runtime_status')).state, 'stopped', '测试需要一个未连接的实例');
   console.log('PASS native startup, IPC and packaged core discovery');
-  if (process.env.ANIBOX_CHECK_WINDOW === '1') {
+  if (['1', 'frame'].includes(process.env.ANIBOX_CHECK_WINDOW)) {
     await invoke('plugin:window|show', { label: 'main' });
     await page.waitForTimeout(250);
     console.log(
@@ -69,6 +70,7 @@ try {
           'scripts/check-window.ps1',
           '-ApplicationProcessId',
           String(app.pid),
+          ...(process.env.ANIBOX_CHECK_WINDOW === 'frame' ? ['-GeometryOnly'] : []),
         ],
         { encoding: 'utf8', windowsHide: true, timeout: 15000 },
       ).trim(),
@@ -125,16 +127,32 @@ try {
   const targetPort = target.address().port;
   for (const core of ['xray', 'sing-box']) {
     const proxyPort = await freePort();
+    blocker = createTcpServer();
+    await new Promise((resolve, reject) =>
+      blocker.once('error', reject).listen(proxyPort, '127.0.0.1', resolve),
+    );
     const config =
       core === 'xray'
         ? {
             log: { loglevel: 'warning' },
-            inbounds: [{ tag: 'test', listen: '127.0.0.1', port: proxyPort, protocol: 'http', settings: {} }],
+            inbounds: [
+              {
+                tag: 'socks-in',
+                listen: '127.0.0.1',
+                port: proxyPort,
+                protocol: 'socks',
+                settings: { udp: true },
+              },
+              { tag: 'http-in', listen: '127.0.0.1', port: proxyPort + 1, protocol: 'http', settings: {} },
+            ],
             outbounds: [{ protocol: 'freedom', tag: 'direct' }],
           }
         : {
             log: { level: 'warn' },
-            inbounds: [{ type: 'http', tag: 'test', listen: '127.0.0.1', listen_port: proxyPort }],
+            inbounds: [
+              { type: 'socks', tag: 'socks-in', listen: '127.0.0.1', listen_port: proxyPort },
+              { type: 'http', tag: 'http-in', listen: '127.0.0.1', listen_port: proxyPort + 1 },
+            ],
             outbounds: [{ type: 'direct', tag: 'direct' }],
             route: {
               final: 'direct',
@@ -154,12 +172,17 @@ try {
       managed: true,
     });
     assert.equal(started.state, 'running');
+    assert.notEqual(started.localPorts.socks, proxyPort, 'Occupied SOCKS port must be replaced');
+    assert.equal(started.localPorts.http, started.localPorts.socks + 1);
+    assert.match(started.message, /端口被占用/);
+    const actual = JSON.parse(await invoke('current_config'));
+    assert.equal(actual.inbounds[1][core === 'xray' ? 'port' : 'listen_port'], started.localPorts.http);
     await invoke('traffic_stats');
     const response = await new Promise((resolve, reject) => {
       const req = request(
         {
           hostname: '127.0.0.1',
-          port: proxyPort,
+          port: started.localPorts.http,
           path: `http://127.0.0.1:${targetPort}/health`,
           headers: { Host: `127.0.0.1:${targetPort}` },
         },
@@ -185,10 +208,157 @@ try {
       'PASS ' + core + ' real counters: ' + stats.uploadTotal + ' up / ' + stats.downloadTotal + ' down',
     );
     assert.equal((await invoke('stop_core')).state, 'stopped');
-    console.log(`PASS ${core}: validate → start → local HTTP proxy transfer → stop`);
+    const native = structuredClone(config);
+    if (core === 'sing-box') native.route = { final: 'direct' };
+    await assert.rejects(
+      invoke('start_core', { core, config: JSON.stringify(native), mode: 'local', managed: false }),
+      /bind|address already|socket address|占用|10048/i,
+    );
+    const failure = await invoke('runtime_status');
+    assert.equal(failure.state, 'error');
+    assert.match(failure.message, /bind|address already|socket address|10048/i);
+    await new Promise((resolve) => blocker.close(resolve));
+    blocker = null;
+    console.log(
+      `PASS ${core}: occupied port → automatic replacement → real transfer; native bind failure retains core output`,
+    );
   }
-  console.log('桌面集成验证通过；未改变系统代理，未访问外部节点。');
+  if (process.env.ANIBOX_CHECK_TUN === '1') {
+    for (const core of ['xray', 'sing-box']) {
+      const config =
+        core === 'xray'
+          ? {
+              log: { loglevel: 'warning' },
+              inbounds: [
+                {
+                  tag: 'tun-in',
+                  protocol: 'tun',
+                  settings: {
+                    name: 'Anibox',
+                    mtu: 1500,
+                    gateway: ['172.31.247.1/30'],
+                    autoSystemRoutingTable: [],
+                    autoOutboundsInterface: 'auto',
+                  },
+                },
+                {
+                  tag: 'socks-in',
+                  listen: '127.0.0.1',
+                  port: 10808,
+                  protocol: 'socks',
+                  settings: { udp: true },
+                },
+                { tag: 'http-in', listen: '127.0.0.1', port: 10809, protocol: 'http' },
+              ],
+              outbounds: [{ tag: 'direct', protocol: 'freedom' }],
+            }
+          : {
+              log: { level: 'warn' },
+              inbounds: [
+                {
+                  tag: 'tun-in',
+                  type: 'tun',
+                  interface_name: 'Anibox',
+                  address: ['172.31.247.1/30'],
+                  auto_route: false,
+                  strict_route: false,
+                  dns_mode: 'disabled',
+                },
+                { tag: 'socks-in', type: 'socks', listen: '127.0.0.1', listen_port: 10808 },
+                { tag: 'http-in', type: 'http', listen: '127.0.0.1', listen_port: 10809 },
+              ],
+              outbounds: [{ tag: 'direct', type: 'direct' }],
+              route: { final: 'direct' },
+            };
+      console.log(
+        `Checking ${core} TUN helper; Windows may request administrator authorization. No default routes or DNS interception are enabled.`,
+      );
+      try {
+        const status = await invoke('start_core', {
+          core,
+          config: JSON.stringify(config),
+          mode: 'tun',
+          managed: true,
+        });
+        assert.equal(status.state, 'running');
+        await pause(1200);
+        assert.equal((await invoke('runtime_status')).state, 'running');
+      } finally {
+        await invoke('stop_core');
+      }
+      console.log(
+        `PASS ${core}: elevated TUN driver start → status → stop (no default routes or DNS changes)`,
+      );
+    }
+  }
+  if (process.env.ANIBOX_CHECK_SYSTEM === '1') {
+    const snapshot = () =>
+      JSON.parse(
+        execFileSync(
+          'powershell',
+          [
+            '-NoProfile',
+            '-NonInteractive',
+            '-Command',
+            "$r=Get-Item -LiteralPath 'HKCU:\\Software\\Microsoft\\Windows\\CurrentVersion\\Internet Settings';$v=@{};foreach($n in @('ProxyEnable','ProxyServer','ProxyOverride','AutoConfigURL')){$v[$n]=$r.GetValue($n,$null,'DoNotExpandEnvironmentNames')};$v | ConvertTo-Json -Compress",
+          ],
+          { encoding: 'utf8', windowsHide: true },
+        ),
+      );
+    const previous = snapshot();
+    for (const core of ['xray', 'sing-box']) {
+      const port = await freePort();
+      blocker = createTcpServer();
+      await new Promise((resolve, reject) =>
+        blocker.once('error', reject).listen(port, '127.0.0.1', resolve),
+      );
+      const config =
+        core === 'xray'
+          ? {
+              inbounds: [
+                { tag: 'socks-in', protocol: 'socks', listen: '127.0.0.1', port, settings: { udp: true } },
+                { tag: 'http-in', protocol: 'http', listen: '127.0.0.1', port: port + 1 },
+              ],
+              outbounds: [{ tag: 'direct', protocol: 'freedom' }],
+            }
+          : {
+              inbounds: [
+                { tag: 'socks-in', type: 'socks', listen: '127.0.0.1', listen_port: port },
+                { tag: 'http-in', type: 'http', listen: '127.0.0.1', listen_port: port + 1 },
+              ],
+              outbounds: [{ tag: 'direct', type: 'direct' }],
+            };
+      try {
+        const status = await invoke('start_core', {
+          core,
+          config: JSON.stringify(config),
+          mode: 'system',
+          managed: true,
+        });
+        assert.notEqual(status.localPorts.socks, port);
+        const active = snapshot();
+        assert.equal(active.ProxyEnable, 1);
+        assert.equal(active.ProxyServer, `127.0.0.1:${status.localPorts.http}`);
+      } finally {
+        await invoke('stop_core');
+        await new Promise((resolve) => blocker.close(resolve));
+        blocker = null;
+        const restored = snapshot();
+        assert(
+          Object.keys(previous).every(
+            (key) => JSON.stringify(previous[key]) === JSON.stringify(restored[key]),
+          ),
+          'Previous system proxy settings must be restored',
+        );
+      }
+      console.log(
+        `PASS ${core}: occupied port → correct Windows system proxy endpoint → original settings restored`,
+      );
+    }
+  }
+  console.log('桌面集成验证通过；未访问外部节点。');
 } finally {
+  blocker?.close();
   target.close();
   if (page && !page.isClosed()) {
     try {

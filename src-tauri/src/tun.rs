@@ -142,6 +142,7 @@ pub fn start(
     core: Core,
     config: String,
     managed: bool,
+    reservation: &mut Option<crate::ports::Reservation>,
 ) -> Result<ElevatedSession, String> {
     use windows_sys::Win32::{
         Foundation::{CloseHandle, WAIT_OBJECT_0},
@@ -214,6 +215,9 @@ pub fn start(
         }
         match listener.accept() {
             Ok((mut stream, _)) => {
+                // Windows accepts inherit the listener's nonblocking mode. The authenticated
+                // control channel uses blocking line reads with timeouts, including core startup.
+                stream.set_nonblocking(false).map_err(|e| e.to_string())?;
                 stream
                     .set_read_timeout(Some(Duration::from_secs(35)))
                     .map_err(|e| e.to_string())?;
@@ -225,9 +229,13 @@ pub fn start(
                 if reader.read_line(&mut hello).is_err() || hello.trim() != token {
                     continue;
                 }
+                // Keep selected proxy ports reserved through UAC; release just before the helper starts the core.
+                drop(reservation.take());
                 stream.write_all(b"OK\n").map_err(|e| e.to_string())?;
                 let mut reply = String::new();
-                reader.read_line(&mut reply).map_err(|_| "TUN 启动未响应")?;
+                reader
+                    .read_line(&mut reply)
+                    .map_err(|e| format!("TUN 启动未响应：{e}"))?;
                 let response: Response =
                     serde_json::from_str(&reply).map_err(|_| "TUN 启动响应无效")?;
                 if response.state != "running" {
@@ -252,7 +260,13 @@ pub fn start(
     result
 }
 #[cfg(not(windows))]
-pub fn start(_: &tauri::AppHandle, _: Core, _: String, _: bool) -> Result<ElevatedSession, String> {
+pub fn start(
+    _: &tauri::AppHandle,
+    _: Core,
+    _: String,
+    _: bool,
+    _: &mut Option<crate::ports::Reservation>,
+) -> Result<ElevatedSession, String> {
     Err("TUN 目前仅支持 Windows".into())
 }
 
@@ -269,6 +283,7 @@ struct ConsoleCore {
     _job: crate::process_job::ProcessJob,
     owned_interface: Option<String>,
     lease: Option<PathBuf>,
+    output: crate::core_output::CoreOutput,
 }
 #[cfg(windows)]
 impl ConsoleCore {
@@ -278,7 +293,11 @@ impl ConsoleCore {
         interface: Option<String>,
         lease: Option<PathBuf>,
     ) -> Result<Self, String> {
-        use windows_sys::Win32::{Foundation::CloseHandle, System::Threading::*};
+        use std::os::windows::io::AsRawHandle;
+        use windows_sys::Win32::{
+            Foundation::{CloseHandle, SetHandleInformation, HANDLE_FLAG_INHERIT},
+            System::Threading::*,
+        };
         let file = wide(exe.as_os_str());
         let mut args = wide(std::ffi::OsStr::new(&format!(
             "\"{}\" run -c \"{}\"",
@@ -288,8 +307,23 @@ impl ConsoleCore {
         let cwd = wide(exe.parent().ok_or("内核路径无效")?.as_os_str());
         let mut startup: STARTUPINFOW = unsafe { std::mem::zeroed() };
         startup.cb = std::mem::size_of_val(&startup) as u32;
-        startup.dwFlags = 1;
+        let (reader, writer) = crate::core_output::pipe()?;
+        let input = fs::File::open("NUL").map_err(|e| e.to_string())?;
+        if unsafe {
+            SetHandleInformation(
+                input.as_raw_handle(),
+                HANDLE_FLAG_INHERIT,
+                HANDLE_FLAG_INHERIT,
+            )
+        } == 0
+        {
+            return Err(std::io::Error::last_os_error().to_string());
+        }
+        startup.dwFlags = STARTF_USESHOWWINDOW | STARTF_USESTDHANDLES;
         startup.wShowWindow = 0;
+        startup.hStdInput = input.as_raw_handle();
+        startup.hStdOutput = writer.as_raw_handle();
+        startup.hStdError = writer.as_raw_handle();
         let mut process: PROCESS_INFORMATION = unsafe { std::mem::zeroed() };
         if unsafe {
             CreateProcessW(
@@ -297,7 +331,7 @@ impl ConsoleCore {
                 args.as_mut_ptr(),
                 std::ptr::null(),
                 std::ptr::null(),
-                0,
+                1,
                 CREATE_NEW_CONSOLE,
                 std::ptr::null(),
                 cwd.as_ptr(),
@@ -311,6 +345,10 @@ impl ConsoleCore {
                 std::io::Error::last_os_error()
             ));
         }
+        drop(writer);
+        drop(input);
+        let mut output = crate::core_output::CoreOutput::default();
+        output.drain(reader);
         unsafe {
             CloseHandle(process.hThread);
         }
@@ -324,18 +362,27 @@ impl ConsoleCore {
                 return Err(e);
             }
         };
-        let instance = Self {
+        let mut instance = Self {
             handle: process.hProcess as isize,
             pid: process.dwProcessId,
             _job: job,
             owned_interface: interface,
             lease,
+            output,
         };
         std::thread::sleep(Duration::from_millis(900));
         if !instance.running() {
-            return Err("TUN 内核退出，请检查配置、端口或虚拟网卡驱动".into());
+            return Err(instance.exit_error());
         }
         Ok(instance)
+    }
+    fn exit_error(&mut self) -> String {
+        self.output.finish();
+        let mut code = 0;
+        unsafe {
+            windows_sys::Win32::System::Threading::GetExitCodeProcess(self.handle as _, &mut code);
+        }
+        self.output.error(&format!("TUN 内核退出（代码 {code}）"))
     }
     fn running(&self) -> bool {
         unsafe {
@@ -411,14 +458,21 @@ fn cleanup_routes(alias: &str) -> Result<(), String> {
         return Err("TUN 接口标识无效".into());
     }
     use std::os::windows::process::CommandExt;
-    let script=format!("$ErrorActionPreference='Stop';$i=Get-NetAdapter -IncludeHidden -Name '{alias}' -ErrorAction SilentlyContinue;if($i){{Get-NetRoute -InterfaceIndex $i.ifIndex -ErrorAction SilentlyContinue | Remove-NetRoute -Confirm:$false;Set-DnsClientServerAddress -InterfaceIndex $i.ifIndex -ResetServerAddresses}} ");
+    // A name lookup for an already deleted Wintun adapter leaves PowerShell's `$?`
+    // false even with SilentlyContinue, which made every later TUN start fail.
+    // Enumerate successfully, then match only the interface owned by this lease.
+    let script=format!("$ErrorActionPreference='Stop';$i=Get-NetAdapter -IncludeHidden | Where-Object {{ $_.Name -eq '{alias}' }};if($i){{Get-NetRoute -InterfaceIndex $i.ifIndex -ErrorAction SilentlyContinue | Remove-NetRoute -Confirm:$false;Set-DnsClientServerAddress -InterfaceIndex $i.ifIndex -ResetServerAddresses}};exit 0");
     let output = std::process::Command::new("powershell.exe")
         .args(["-NoProfile", "-NonInteractive", "-Command", &script])
         .creation_flags(0x08000000)
         .output()
         .map_err(|e| e.to_string())?;
     if !output.status.success() {
-        return Err("TUN 路由清理失败，将在下次启用 TUN 时重试".into());
+        let details = String::from_utf8_lossy(&output.stderr)
+            .chars()
+            .take(1200)
+            .collect::<String>();
+        return Err(format!("TUN 路由清理失败：{}", details.trim()));
     }
     Ok(())
 }
@@ -574,7 +628,7 @@ fn run_helper(
                     Response {
                         state: if running { "running" } else { "error" }.into(),
                         pid: Some(child.pid),
-                        message: (!running).then(|| "TUN 内核已退出".into()),
+                        message: (!running).then(|| child.exit_error()),
                     },
                 )?;
                 if !running {
@@ -587,7 +641,7 @@ fn run_helper(
                     .contains(&e.kind()) =>
             {
                 if !child.running() {
-                    break;
+                    return Err(child.exit_error());
                 }
             }
             Err(_) => break,
@@ -642,6 +696,13 @@ pub fn helper_main(_: PathBuf) -> Result<(), String> {
 mod tests {
     use super::*;
     use serde_json::json;
+    #[cfg(windows)]
+    #[test]
+    fn already_removed_adapter_does_not_block_future_starts() {
+        let alias = format!("Anibox-{}", &random_token().unwrap()[..8]);
+        cleanup_routes(&alias).unwrap();
+        cleanup_routes(&alias).unwrap();
+    }
     #[test]
     fn generated_aliases_are_isolated_and_native_names_are_not_owned() {
         let mut value = json!({"inbounds":[{"protocol":"tun","settings":{"name":"UserAdapter"}}]});

@@ -6,7 +6,12 @@ pub fn apply(window: &tauri::Window) {
         Graphics::Gdi::{CreateRoundRectRgn, DeleteObject, SetWindowRgn},
         UI::{
             HiDpi::GetDpiForWindow,
-            WindowsAndMessaging::{GetWindowRect, IsIconic, IsZoomed},
+            WindowsAndMessaging::{
+                GetWindowLongPtrW, GetWindowRect, IsIconic, IsZoomed, SetWindowLongPtrW,
+                SetWindowPos, GWL_EXSTYLE, GWL_STYLE, SWP_FRAMECHANGED, SWP_NOACTIVATE, SWP_NOMOVE,
+                SWP_NOSIZE, SWP_NOZORDER, WS_CAPTION, WS_EX_CLIENTEDGE, WS_EX_DLGMODALFRAME,
+                WS_EX_WINDOWEDGE,
+            },
         },
     };
     static LAST: Mutex<Option<(isize, i32, i32, u32, bool)>> = Mutex::new(None);
@@ -14,6 +19,27 @@ pub fn apply(window: &tauri::Window) {
         return;
     };
     unsafe {
+        // Tao retains WS_CAPTION for native resizing. Its non-client painter can leak the
+        // system icon and a white caption into transparent pixels after activation/resize.
+        // Its undecorated hit testing still handles resizing without that caption style.
+        let style = GetWindowLongPtrW(handle.0, GWL_STYLE);
+        let extended = GetWindowLongPtrW(handle.0, GWL_EXSTYLE);
+        let clean_style = style & !(WS_CAPTION as isize);
+        let clean_extended =
+            extended & !((WS_EX_WINDOWEDGE | WS_EX_CLIENTEDGE | WS_EX_DLGMODALFRAME) as isize);
+        if style != clean_style || extended != clean_extended {
+            SetWindowLongPtrW(handle.0, GWL_STYLE, clean_style);
+            SetWindowLongPtrW(handle.0, GWL_EXSTYLE, clean_extended);
+            SetWindowPos(
+                handle.0,
+                std::ptr::null_mut(),
+                0,
+                0,
+                0,
+                0,
+                SWP_FRAMECHANGED | SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE,
+            );
+        }
         if IsIconic(handle.0) != 0 {
             return;
         }

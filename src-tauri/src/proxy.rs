@@ -1,5 +1,5 @@
 //! A journalled lease: restore only when the current registry values still match our changes.
-//! This module is never exercised by configuration checks or automated tests.
+//! Registry writes are exercised only by explicitly enabled system-proxy integration tests.
 use serde::{Deserialize, Serialize};
 use std::path::Path;
 

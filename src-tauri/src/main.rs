@@ -1,6 +1,8 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
+mod core_output;
 mod core_updates;
+mod ports;
 mod process_job;
 mod proxy;
 mod rules;
@@ -61,6 +63,7 @@ struct RuntimeStatus {
     pid: Option<u32>,
     started_at: Option<String>,
     message: Option<String>,
+    local_ports: Option<ports::LocalPorts>,
 }
 impl Default for RuntimeStatus {
     fn default() -> Self {
@@ -70,6 +73,7 @@ impl Default for RuntimeStatus {
             pid: None,
             started_at: None,
             message: None,
+            local_ports: None,
         }
     }
 }
@@ -81,6 +85,7 @@ struct RuntimeState {
     starting: Option<String>,
     child: Option<Child>,
     job: Option<process_job::ProcessJob>,
+    output: Option<core_output::CoreOutput>,
     config_path: Option<PathBuf>,
     status: RuntimeStatus,
 }
@@ -405,7 +410,7 @@ fn prepare_runtime(
 }
 
 fn stop_impl(app: &tauri::AppHandle) -> Result<RuntimeStatus, String> {
-    let (mut child, mut elevated, job, path) = {
+    let (mut child, mut elevated, job, path, mut output) = {
         let state = app.state::<AppState>();
         let mut runtime = state.runtime.lock().map_err(|_| "运行状态不可用")?;
         runtime.starting = None;
@@ -417,6 +422,7 @@ fn stop_impl(app: &tauri::AppHandle) -> Result<RuntimeStatus, String> {
             runtime.elevated.take(),
             runtime.job.take(),
             runtime.config_path.take(),
+            runtime.output.take(),
         )
     };
     let result = if let Some(peer) = elevated.as_mut() {
@@ -431,6 +437,9 @@ fn stop_impl(app: &tauri::AppHandle) -> Result<RuntimeStatus, String> {
         let _ = child.wait();
     }
     drop(job);
+    if let Some(output) = output.as_mut() {
+        output.finish();
+    }
     drop(elevated);
     if let Some(path) = path {
         let _ = fs::remove_file(path);
@@ -453,14 +462,33 @@ async fn start_core(
     mode: String,
     managed: Option<bool>,
 ) -> Result<RuntimeStatus, String> {
-    tauri::async_runtime::spawn_blocking(move || {
+    let feedback = app.clone();
+    let result = tauri::async_runtime::spawn_blocking(move || {
         let state = app.state::<AppState>();
         let _install = state.core_install.lock().map_err(|_| "内核更新不可用")?;
         if !["local", "system", "tun"].contains(&mode.as_str()) {
             return Err("连接方式无效".into());
         }
         let managed = managed.unwrap_or(false);
-        let (config, endpoint, is_tun) = prepare_runtime(&app, core, &config, managed)?;
+        let mut value: Value = serde_json::from_str(&config).map_err(|e| e.to_string())?;
+        let mut reservation = if managed {
+            Some(ports::prepare(&mut value, core)?)
+        } else {
+            None
+        };
+        let local_ports = reservation.as_ref().map(|r| r.ports);
+        let port_message = reservation.as_ref().filter(|r| r.changed).map(|r| {
+            format!(
+                "端口被占用，已切换为 SOCKS {} / HTTP {}",
+                r.ports.socks, r.ports.http
+            )
+        });
+        let input = if managed {
+            serde_json::to_string(&value).map_err(|e| e.to_string())?
+        } else {
+            config
+        };
+        let (config, endpoint, is_tun) = prepare_runtime(&app, core, &input, managed)?;
         if mode == "tun" && !is_tun {
             return Err("原生配置中需要定义 TUN 入站".into());
         }
@@ -496,18 +524,19 @@ async fn start_core(
             app: app.clone(),
             id: operation.clone(),
         };
-        let (child, elevated, job, path, pid) = if is_tun {
-            let peer = tun::start(&app, core, config.clone(), managed)?;
+        let (child, elevated, job, path, pid, output) = if is_tun {
+            let peer = tun::start(&app, core, config.clone(), managed, &mut reservation)?;
             let pid = peer.pid;
-            (None, Some(peer), None, None, pid)
+            (None, Some(peer), None, None, pid, None)
         } else {
             let exe = find_core(&app, core)?;
             let path = write_config(&app, &config, "runtime")?;
             let mut cmd = command(&exe);
             cmd.args(["run", "-c"])
                 .arg(&path)
-                .stdout(Stdio::null())
-                .stderr(Stdio::null());
+                .stdout(Stdio::piped())
+                .stderr(Stdio::piped());
+            drop(reservation.take());
             let mut child = match cmd.spawn() {
                 Ok(child) => child,
                 Err(error) => {
@@ -515,6 +544,13 @@ async fn start_core(
                     return Err(error.to_string());
                 }
             };
+            let mut output = core_output::CoreOutput::default();
+            if let Some(stdout) = child.stdout.take() {
+                output.drain(stdout);
+            }
+            if let Some(stderr) = child.stderr.take() {
+                output.drain(stderr);
+            }
             let job = match process_job::ProcessJob::attach(&child) {
                 Ok(job) => job,
                 Err(error) => {
@@ -526,8 +562,9 @@ async fn start_core(
             };
             thread::sleep(Duration::from_millis(450));
             if let Some(status) = child.try_wait().map_err(|e| e.to_string())? {
+                output.finish();
                 let _ = fs::remove_file(&path);
-                return Err(format!("内核退出：{status}，请检查配置和端口"));
+                return Err(output.error(&format!("{} 内核退出：{status}", core.name())));
             }
             if let Some(port) = port {
                 let ready = (0..20).any(|_| {
@@ -556,7 +593,7 @@ async fn start_core(
                 }
             }
             let pid = child.id();
-            (Some(child), None, Some(job), Some(path), pid)
+            (Some(child), None, Some(job), Some(path), pid, Some(output))
         };
         let state = app.state::<AppState>();
         let mut runtime = state.runtime.lock().map_err(|_| "运行状态不可用")?;
@@ -573,6 +610,7 @@ async fn start_core(
         runtime.child = child;
         runtime.elevated = elevated;
         runtime.job = job;
+        runtime.output = output;
         runtime.config_path = path;
         runtime.config = Some(config);
         runtime.endpoint = endpoint;
@@ -587,12 +625,25 @@ async fn start_core(
                     .as_secs()
                     .to_string(),
             ),
-            message: None,
+            message: port_message,
+            local_ports,
         };
         Ok(runtime.status.clone())
     })
     .await
-    .map_err(|e| e.to_string())?
+    .map_err(|e| e.to_string())?;
+    if let Err(error) = &result {
+        if let Ok(mut runtime) = feedback.state::<AppState>().runtime.lock() {
+            if runtime.child.is_none() && runtime.elevated.is_none() && runtime.starting.is_none() {
+                runtime.status = RuntimeStatus {
+                    state: "error".into(),
+                    message: Some(error.clone()),
+                    ..RuntimeStatus::default()
+                };
+            }
+        }
+    }
+    result
 }
 #[tauri::command]
 async fn stop_core(app: tauri::AppHandle) -> Result<RuntimeStatus, String> {
@@ -614,10 +665,16 @@ async fn runtime_status(app: tauri::AppHandle) -> Result<RuntimeStatus, String> 
                     Err(error) => Some(error),
                 }
             } else if let Some(child) = runtime.child.as_mut() {
-                child
-                    .try_wait()
-                    .map_err(|e| e.to_string())?
-                    .map(|status| format!("内核已退出：{status}"))
+                let exit = child.try_wait().map_err(|e| e.to_string())?;
+                exit.map(|status| {
+                    let context = format!("内核已退出：{status}");
+                    if let Some(output) = runtime.output.as_mut() {
+                        output.finish();
+                        output.error(&context)
+                    } else {
+                        context
+                    }
+                })
             } else {
                 None
             }
@@ -878,7 +935,9 @@ fn main() {
             #[cfg(windows)]
             if matches!(
                 event,
-                tauri::WindowEvent::Resized(_) | tauri::WindowEvent::ScaleFactorChanged { .. }
+                tauri::WindowEvent::Resized(_)
+                    | tauri::WindowEvent::ScaleFactorChanged { .. }
+                    | tauri::WindowEvent::Focused(_)
             ) {
                 window_shape::apply(window);
             }

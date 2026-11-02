@@ -10,6 +10,7 @@
         "minWidth": 900,
         "minHeight": 620,
         "decorations": false,
+        "shadow": false,
         "transparent": true,
         "backgroundColor": "#00000000",
         "theme": "Light",

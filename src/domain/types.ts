@@ -75,6 +75,7 @@ export interface RuntimeStatus {
   pid?: number;
   startedAt?: string;
   message?: string;
+  localPorts?: { socks: number; http: number };
 }
 export interface CoreUpdate {
   core: Core;
