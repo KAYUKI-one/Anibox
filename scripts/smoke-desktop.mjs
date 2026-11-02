@@ -1,6 +1,7 @@
 // Core traffic targets loopback only. Rule updates use the documented public provider.
 // System proxy roundtrips and route-free TUN driver checks are explicit opt-ins.
 import { chromium } from '@playwright/test';
+import { build } from 'esbuild';
 import { spawn, execFileSync } from 'node:child_process';
 import { createServer as createHttpServer, request } from 'node:http';
 import { createServer as createTcpServer } from 'node:net';
@@ -15,6 +16,34 @@ async function freePort() {
   const port = server.address().port;
   await new Promise((resolve) => server.close(resolve));
   return port;
+}
+let templateModule;
+async function generatedConfig(core, mode, port = 10808) {
+  if (!templateModule) {
+    const result = await build({
+      stdin: {
+        contents:
+          'export {parseImport} from "./src/domain/import.ts"; export {buildConfig} from "./src/domain/config.ts"; export {emptyData} from "./src/domain/storage.ts";',
+        resolveDir: process.cwd(),
+      },
+      bundle: true,
+      platform: 'node',
+      format: 'esm',
+      write: false,
+    });
+    templateModule = await import(
+      'data:text/javascript;base64,' + Buffer.from(result.outputFiles[0].text).toString('base64')
+    );
+  }
+  const { parseImport, buildConfig, emptyData } = templateModule;
+  const link =
+    core === 'xray'
+      ? 'vless://11111111-1111-4111-8111-111111111111@127.0.0.1:443?security=tls&sni=example.com'
+      : 'hysteria2://test-password@127.0.0.1:443?sni=example.com';
+  const data = emptyData();
+  data.mode = mode;
+  data.settings.port = port;
+  return JSON.parse(buildConfig(parseImport(link).nodes[0], data).config);
 }
 const debugPort = await freePort();
 const executable = path.resolve(process.env.ANIBOX_TEST_EXE || '.local/qa/Anibox/Anibox.exe');
@@ -225,51 +254,21 @@ try {
   }
   if (process.env.ANIBOX_CHECK_TUN === '1') {
     for (const core of ['xray', 'sing-box']) {
-      const config =
-        core === 'xray'
-          ? {
-              log: { loglevel: 'warning' },
-              inbounds: [
-                {
-                  tag: 'tun-in',
-                  protocol: 'tun',
-                  settings: {
-                    name: 'Anibox',
-                    mtu: 1500,
-                    gateway: ['172.31.247.1/30'],
-                    autoSystemRoutingTable: [],
-                    autoOutboundsInterface: 'auto',
-                  },
-                },
-                {
-                  tag: 'socks-in',
-                  listen: '127.0.0.1',
-                  port: 10808,
-                  protocol: 'socks',
-                  settings: { udp: true },
-                },
-                { tag: 'http-in', listen: '127.0.0.1', port: 10809, protocol: 'http' },
-              ],
-              outbounds: [{ tag: 'direct', protocol: 'freedom' }],
-            }
-          : {
-              log: { level: 'warn' },
-              inbounds: [
-                {
-                  tag: 'tun-in',
-                  type: 'tun',
-                  interface_name: 'Anibox',
-                  address: ['172.31.247.1/30'],
-                  auto_route: false,
-                  strict_route: false,
-                  dns_mode: 'disabled',
-                },
-                { tag: 'socks-in', type: 'socks', listen: '127.0.0.1', listen_port: 10808 },
-                { tag: 'http-in', type: 'http', listen: '127.0.0.1', listen_port: 10809 },
-              ],
-              outbounds: [{ tag: 'direct', type: 'direct' }],
-              route: { final: 'direct' },
-            };
+      const config = await generatedConfig(core, 'tun');
+      // Preserve full DNS, routing and protocol options; only disable host interception for this driver test.
+      const inbound = config.inbounds.find((i) => (i.protocol ?? i.type) === 'tun');
+      if (core === 'xray') {
+        inbound.settings.gateway = ['172.31.247.1/30'];
+        inbound.settings.dns = [];
+        inbound.settings.autoSystemRoutingTable = [];
+      } else {
+        Object.assign(inbound, {
+          address: ['172.31.247.1/30'],
+          auto_route: false,
+          strict_route: false,
+          dns_mode: 'disabled',
+        });
+      }
       console.log(
         `Checking ${core} TUN helper; Windows may request administrator authorization. No default routes or DNS interception are enabled.`,
       );
@@ -287,7 +286,7 @@ try {
         await invoke('stop_core');
       }
       console.log(
-        `PASS ${core}: elevated TUN driver start → status → stop (no default routes or DNS changes)`,
+        `PASS ${core}: full DNS/routing template → elevated TUN driver start → status → stop (no default routes or DNS changes)`,
       );
     }
   }
@@ -312,22 +311,7 @@ try {
       await new Promise((resolve, reject) =>
         blocker.once('error', reject).listen(port, '127.0.0.1', resolve),
       );
-      const config =
-        core === 'xray'
-          ? {
-              inbounds: [
-                { tag: 'socks-in', protocol: 'socks', listen: '127.0.0.1', port, settings: { udp: true } },
-                { tag: 'http-in', protocol: 'http', listen: '127.0.0.1', port: port + 1 },
-              ],
-              outbounds: [{ tag: 'direct', protocol: 'freedom' }],
-            }
-          : {
-              inbounds: [
-                { tag: 'socks-in', type: 'socks', listen: '127.0.0.1', listen_port: port },
-                { tag: 'http-in', type: 'http', listen: '127.0.0.1', listen_port: port + 1 },
-              ],
-              outbounds: [{ tag: 'direct', type: 'direct' }],
-            };
+      const config = await generatedConfig(core, 'system', port);
       try {
         const status = await invoke('start_core', {
           core,
@@ -352,7 +336,7 @@ try {
         );
       }
       console.log(
-        `PASS ${core}: occupied port → correct Windows system proxy endpoint → original settings restored`,
+        `PASS ${core}: full DNS/routing template → occupied port → correct Windows system proxy endpoint → original settings restored`,
       );
     }
   }

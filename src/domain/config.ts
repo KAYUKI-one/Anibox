@@ -97,7 +97,7 @@ export function buildConfig(node: ProxyNode, data: AppData): { core: Core; confi
       log: { level: 'warn', timestamp: true },
       dns: {
         servers: [
-          { type: 'udp', tag: 'direct-dns', server: '223.5.5.5', server_port: 53, detour: 'direct' },
+          { type: 'udp', tag: 'direct-dns', server: '223.5.5.5', server_port: 53 },
           {
             type: 'https',
             tag: 'proxy-dns',

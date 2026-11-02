@@ -982,7 +982,7 @@ export default function App() {
                         mutate((current) => ({ ...current, mode: event.target.value as AppData['mode'] }))
                       }
                     >
-                      <option value="local">本地代理</option>
+                      <option value="local">仅开放本地端口</option>
                       <option value="system">系统代理</option>
                       <option value="tun">TUN</option>
                     </select>

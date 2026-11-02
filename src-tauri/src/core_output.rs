@@ -39,7 +39,8 @@ impl CoreOutput {
             return context.into();
         };
         let data: Vec<u8> = bytes.iter().copied().collect();
-        let text = String::from_utf8_lossy(&data);
+        let raw = String::from_utf8_lossy(&data);
+        let text = without_ansi(&raw);
         let tail: String = text
             .chars()
             .rev()
@@ -54,6 +55,31 @@ impl CoreOutput {
             format!("{context}\n{}", tail.trim())
         }
     }
+}
+
+fn without_ansi(text: &str) -> String {
+    let mut escape = false;
+    let mut sequence = false;
+    text.chars()
+        .filter(|c| {
+            if sequence {
+                if ('\u{40}'..='\u{7e}').contains(c) {
+                    sequence = false;
+                }
+                return false;
+            }
+            if escape {
+                escape = false;
+                sequence = *c == '[';
+                return false;
+            }
+            if *c == '\u{1b}' {
+                escape = true;
+                return false;
+            }
+            !c.is_control() || matches!(c, '\n' | '\r' | '\t')
+        })
+        .collect()
 }
 
 #[cfg(windows)]
@@ -90,10 +116,14 @@ mod tests {
     #[test]
     fn drains_past_capacity_and_keeps_the_last_error() {
         let mut output = CoreOutput::default();
-        let text = format!("{}\nlisten: address already in use", "x".repeat(100000));
+        let text = format!(
+            "{}\n\u{1b}[31mFATAL\u{1b}[0m listen: address already in use",
+            "x".repeat(100000)
+        );
         output.drain(std::io::Cursor::new(text.into_bytes()));
         output.finish();
         assert_eq!(output.bytes.lock().unwrap().len(), 16 * 1024);
         assert!(output.error("内核退出").ends_with("address already in use"));
+        assert!(!output.error("内核退出").contains('\u{1b}'));
     }
 }
