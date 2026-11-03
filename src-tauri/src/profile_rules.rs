@@ -102,11 +102,11 @@ fn inspect(config: &str, root: &Path, builtin: Option<&Path>) -> Result<Preparat
     let mut needed = BTreeSet::new();
     references(&value["dns"]["rules"], &mut needed);
     references(&value["route"]["rules"], &mut needed);
-    let entries = value
-        .pointer("/route/rule_set")
-        .and_then(Value::as_array)
-        .cloned()
-        .unwrap_or_default();
+    let entries = match value.pointer("/route/rule_set") {
+        None => vec![],
+        Some(Value::Array(entries)) => entries.clone(),
+        Some(_) => return Err("route.rule_set 必须为数组".into()),
+    };
     let mut expanded = vec![];
     for entry in entries {
         if let Some(tags) = entry["tag"].as_array() {
@@ -152,7 +152,16 @@ fn inspect(config: &str, root: &Path, builtin: Option<&Path>) -> Result<Preparat
         }
         let source_format =
             entry["format"] == "source" || original.is_some_and(|p| p.ends_with(".json"));
-        let name = filename(&tag, original, source_format)?;
+        let mut name = filename(&tag, original, source_format)?;
+        // A missing arbitrary filename can still refer to a well-known tag.
+        // Conversely, an alias tag may identify its public rule by filename.
+        if !source_format && source(&name).is_none() {
+            if let Ok(by_tag) = filename(&tag, None, false) {
+                if source(&by_tag).is_some() {
+                    name = by_tag;
+                }
+            }
+        }
         let relative = format!("rules/{name}");
         let destination = root.join(&relative);
         // Only the two managed defaults use Anibox's daily refreshed cache.
@@ -312,6 +321,11 @@ mod tests {
         assert_eq!(plan.missing.len(), 2);
         assert_eq!(out["route"]["rule_set"][0]["path"], "rules/geosite-cn.srs");
         assert_eq!(out["unknown"], c["unknown"]);
+        let renamed = json!({"route":{"rule_set":[{"type":"local","tag":"geosite-google","path":"old-name.srs"}]}});
+        assert_eq!(
+            inspect(&renamed.to_string(), &root, None).unwrap().missing[0].filename,
+            "geosite-google.srs"
+        );
         fs::write(root.join("rules/geosite-google.srs"), b"fixture").unwrap();
         assert_eq!(inspect(&plan.config, &root, None).unwrap().missing.len(), 1);
         fs::remove_dir_all(root).unwrap();
