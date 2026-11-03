@@ -47,6 +47,7 @@ export default function JsonEditor({
         readOnly,
         automaticLayout: true,
         minimap: { enabled: false },
+        stickyScroll: { enabled: false },
         fontFamily: 'Cascadia Code, Consolas, monospace',
         fontSize: 13,
         lineHeight: 24,

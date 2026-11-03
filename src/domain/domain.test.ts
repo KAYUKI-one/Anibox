@@ -96,7 +96,7 @@ describe('configuration generation and subscription ownership', () => {
       'geoip-cn',
     ]);
     expect(config.dns.final).toBe('proxy-dns');
-    expect(config.route.default_domain_resolver).toBe('direct-dns');
+    expect(config.route.default_domain_resolver).toEqual({ server: 'direct-dns', strategy: 'prefer_ipv4' });
   });
   it('never maps missing selection to an unrelated default connection', () => {
     expect(() => activeConfig(emptyData())).toThrow('选择');

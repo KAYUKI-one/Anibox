@@ -63,6 +63,17 @@ impl ElevatedSession {
             Ok(())
         }
     }
+    pub fn logs(&mut self) -> Result<String, String> {
+        Ok(self.exchange("logs")?.message.unwrap_or_default())
+    }
+    pub fn clear_logs(&mut self) -> Result<(), String> {
+        let response = self.exchange("clear-logs")?;
+        if response.state == "error" {
+            Err(response.message.unwrap_or("日志清理失败".into()))
+        } else {
+            Ok(())
+        }
+    }
 }
 pub struct ResponseStatus {
     pub running: bool,
@@ -292,6 +303,7 @@ impl ConsoleCore {
         config_path: &Path,
         interface: Option<String>,
         lease: Option<PathBuf>,
+        log_path: Option<PathBuf>,
     ) -> Result<Self, String> {
         use std::os::windows::io::AsRawHandle;
         use windows_sys::Win32::{
@@ -299,8 +311,13 @@ impl ConsoleCore {
             System::Threading::*,
         };
         let file = wide(exe.as_os_str());
+        let color = if exe.file_stem().is_some_and(|s| s == "sing-box") {
+            "--disable-color "
+        } else {
+            ""
+        };
         let mut args = wide(std::ffi::OsStr::new(&format!(
-            "\"{}\" run -c \"{}\"",
+            "\"{}\" {color}run -c \"{}\"",
             exe.display(),
             config_path.display()
         )));
@@ -348,6 +365,9 @@ impl ConsoleCore {
         drop(writer);
         drop(input);
         let mut output = crate::core_output::CoreOutput::default();
+        if let Some(path) = log_path {
+            output.enable_file(path);
+        }
         output.drain(reader);
         unsafe {
             CloseHandle(process.hThread);
@@ -415,6 +435,7 @@ impl ConsoleCore {
                 }
             }
         }
+        self.output.finish();
         if let Some(alias) = self.owned_interface.take() {
             if let Err(error) = cleanup_routes(&alias) {
                 self.owned_interface = Some(alias);
@@ -593,7 +614,8 @@ fn run_helper(
     if let (Some(alias), Some(lease)) = (&alias, &lease) {
         fs::write(lease, alias).map_err(|e| e.to_string())?;
     }
-    let mut child = ConsoleCore::spawn(&exe, &path, alias, lease)?;
+    let mut child =
+        ConsoleCore::spawn(&exe, &path, alias, lease, Some(root.join("logs/core.log")))?;
     write_response(
         stream,
         Response {
@@ -620,6 +642,27 @@ fn run_helper(
                     },
                 )?;
                 break;
+            }
+            Ok(_) if line.trim() == "logs" => {
+                write_response(
+                    stream,
+                    Response {
+                        state: "logs".into(),
+                        pid: Some(child.pid),
+                        message: Some(child.output.tail()),
+                    },
+                )?;
+            }
+            Ok(_) if line.trim() == "clear-logs" => {
+                let result = child.output.clear();
+                write_response(
+                    stream,
+                    Response {
+                        state: if result.is_ok() { "cleared" } else { "error" }.into(),
+                        pid: Some(child.pid),
+                        message: result.err(),
+                    },
+                )?;
             }
             Ok(_) if line.trim() == "status" => {
                 let running = child.running();
@@ -755,7 +798,8 @@ mod tests {
             };
             fs::write(&path, config.to_string()).unwrap();
             let mut child =
-                ConsoleCore::spawn(&helper_core_path(core).unwrap(), &path, None, None).unwrap();
+                ConsoleCore::spawn(&helper_core_path(core).unwrap(), &path, None, None, None)
+                    .unwrap();
             assert!(child.running());
             child.stop().unwrap();
             let mut code = 0;

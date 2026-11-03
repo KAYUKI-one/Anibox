@@ -203,7 +203,8 @@ export default function App() {
   const [page, setPage] = useState<Page>('home');
   const [search, setSearch] = useState('');
   const [filter, setFilter] = useState<'all' | Core>('all');
-  const [logs, setLogs] = useState<LogEntry[]>([]);
+  const [logSource, setLogSource] = useState('app');
+  const [coreLog, setCoreLog] = useState('');
   const [toast, setToast] = useState('');
   const [importOpen, setImportOpen] = useState(false);
   const [subscriptionOpen, setSubscriptionOpen] = useState(false);
@@ -249,10 +250,32 @@ export default function App() {
 
   const notify = useCallback((message: string, level: LogEntry['level'] = 'info') => {
     setToast(message);
-    setLogs((current) =>
-      [{ id: crypto.randomUUID(), time: new Date().toISOString(), level, message }, ...current].slice(0, 200),
-    );
+    void desktop.appendLog(`${new Date().toISOString()} [${level}] ${message}`).catch(() => {});
   }, []);
+  useEffect(() => {
+    if (page !== 'logs') return;
+    setCoreLog('');
+    let disposed = false,
+      polling = false;
+    const refresh = async () => {
+      if (polling) return;
+      polling = true;
+      try {
+        const log = await (logSource === 'core' ? desktop.runtimeLogs() : desktop.appLogs());
+        if (!disposed) setCoreLog(log);
+      } catch (error) {
+        if (!disposed) setCoreLog(`日志读取失败：${messageOf(error)}`);
+      } finally {
+        polling = false;
+      }
+    };
+    void refresh();
+    const timer = window.setInterval(refresh, 1500);
+    return () => {
+      disposed = true;
+      window.clearInterval(timer);
+    };
+  }, [page, logSource]);
 
   useEffect(() => {
     if (desktop.available)
@@ -1390,22 +1413,32 @@ export default function App() {
           {page === 'logs' && (
             <section className="glass content-panel">
               <div className="section-heading">
-                <h2>应用日志</h2>
-                <IconButton icon={Trash2} label="清空日志" onClick={() => setLogs([])} />
+                <h2>日志</h2>
+                <div className="log-actions">
+                  <select
+                    aria-label="日志来源"
+                    value={logSource}
+                    onChange={(event) => setLogSource(event.target.value)}
+                  >
+                    <option value="app">应用</option>
+                    <option value="core">内核</option>
+                  </select>
+                  <IconButton
+                    icon={Trash2}
+                    label="清空日志"
+                    onClick={() => {
+                      void desktop
+                        .clearLogs(logSource as 'app' | 'core')
+                        .then(() => setCoreLog(''))
+                        .catch((error) => notify(messageOf(error), 'error'));
+                    }}
+                  />
+                </div>
               </div>
               <div className="event-list scroll-region">
-                {!logs.length ? (
-                  <div className="empty-state">
-                    <span>无日志</span>
-                  </div>
-                ) : (
-                  logs.map((log) => (
-                    <div className={`event-row ${log.level}`} key={log.id}>
-                      <time>{new Date(log.time).toLocaleTimeString('zh-CN', { hour12: false })}</time>
-                      <span>{log.message}</span>
-                    </div>
-                  ))
-                )}
+                <pre className="core-log" aria-label={logSource === 'core' ? '内核日志' : '应用日志'}>
+                  {coreLog || (logSource === 'core' ? '无内核输出' : '无日志')}
+                </pre>
               </div>
             </section>
           )}
@@ -1572,6 +1605,17 @@ export default function App() {
                   >
                     <FolderOpen size={15} />
                     打开背景文件夹
+                  </button>
+                  <button
+                    className="button quiet"
+                    onClick={() =>
+                      void desktop
+                        .openStorageFolder('logs')
+                        .catch((error) => notify(messageOf(error), 'error'))
+                    }
+                  >
+                    <FolderOpen size={15} />
+                    打开日志文件夹
                   </button>
                   <button
                     className="button quiet"

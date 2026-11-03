@@ -9,10 +9,15 @@ use std::{
 pub struct CoreOutput {
     bytes: Arc<Mutex<VecDeque<u8>>>,
     readers: Vec<thread::JoinHandle<()>>,
+    file: Option<crate::log_files::Writer>,
 }
 impl CoreOutput {
+    pub fn enable_file(&mut self, path: std::path::PathBuf) {
+        self.file = Some(crate::log_files::Writer::new(path));
+    }
     pub fn drain(&mut self, mut reader: impl Read + Send + 'static) {
         let bytes = self.bytes.clone();
+        let file = self.file.clone();
         self.readers.push(thread::spawn(move || {
             let mut chunk = [0; 2048];
             while let Ok(count) = reader.read(&mut chunk) {
@@ -25,6 +30,9 @@ impl CoreOutput {
                 bytes.extend(&chunk[..count]);
                 let excess = bytes.len().saturating_sub(16 * 1024);
                 bytes.drain(..excess);
+                if let Some(file) = &file {
+                    file.write(&chunk[..count]);
+                }
             }
         }));
     }
@@ -33,14 +41,20 @@ impl CoreOutput {
         for reader in self.readers.drain(..) {
             let _ = reader.join();
         }
+        if let Some(file) = &self.file {
+            let _ = file.flush();
+        }
+    }
+    pub fn clear(&mut self) -> Result<(), String> {
+        let mut bytes = self.bytes.lock().map_err(|_| "日志缓存不可用")?;
+        if let Some(file) = &self.file {
+            file.clear()?;
+        }
+        bytes.clear();
+        Ok(())
     }
     pub fn error(&self, context: &str) -> String {
-        let Ok(bytes) = self.bytes.lock() else {
-            return context.into();
-        };
-        let data: Vec<u8> = bytes.iter().copied().collect();
-        let raw = String::from_utf8_lossy(&data);
-        let text = without_ansi(&raw);
+        let text = self.tail();
         let tail: String = text
             .chars()
             .rev()
@@ -53,6 +67,19 @@ impl CoreOutput {
             context.into()
         } else {
             format!("{context}\n{}", tail.trim())
+        }
+    }
+    pub fn tail(&self) -> String {
+        let Ok(bytes) = self.bytes.lock() else {
+            return String::new();
+        };
+        let data: Vec<u8> = bytes.iter().copied().collect();
+        let raw = String::from_utf8_lossy(&data);
+        let text = without_ansi(&raw);
+        if let Some(error) = self.file.as_ref().and_then(crate::log_files::Writer::error) {
+            format!("[日志文件写入失败：{error}]\n{text}")
+        } else {
+            text
         }
     }
 }

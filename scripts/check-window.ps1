@@ -19,6 +19,7 @@ public static class AniboxWindowCheck {
     [DllImport("user32.dll")] static extern bool ClientToScreen(IntPtr hwnd, ref Point point);
     [DllImport("user32.dll")] static extern uint GetDpiForWindow(IntPtr hwnd);
     [DllImport("user32.dll", EntryPoint="GetWindowLongPtrW")] static extern IntPtr GetWindowLongPtr(IntPtr hwnd,int index);
+    [DllImport("user32.dll", EntryPoint="SetWindowLongPtrW")] static extern IntPtr SetWindowLongPtr(IntPtr hwnd,int index,IntPtr value);
     [DllImport("user32.dll", EntryPoint="SendMessageW")] static extern IntPtr SendMessage(IntPtr hwnd,uint message,IntPtr wparam,IntPtr lparam);
     [DllImport("user32.dll")] static extern bool SetWindowPos(IntPtr hwnd, IntPtr after, int x, int y, int width, int height, uint flags);
     [DllImport("user32.dll")] static extern bool ShowWindow(IntPtr hwnd, int command);
@@ -73,6 +74,20 @@ public static class AniboxWindowCheck {
         if(clientOrigin.X!=original.left || clientOrigin.Y!=original.top)
             throw new Exception("Transparent content must cover the native frame without non-client insets");
         if(geometryOnly) {
+            long originalStyle=GetWindowLongPtr(window,-16).ToInt64();
+            try {
+                for(int cycle=0;cycle<4;cycle++) {
+                    SendMessage(window,0x86,IntPtr.Zero,IntPtr.Zero);
+                    SendMessage(window,0x85,new IntPtr(1),IntPtr.Zero);
+                    SendMessage(window,0xae,IntPtr.Zero,IntPtr.Zero);
+                    SendMessage(window,0xaf,IntPtr.Zero,IntPtr.Zero);
+                    SendMessage(window,0x86,new IntPtr(1),IntPtr.Zero);
+                    // Native window libraries may reapply their cached decorated style on activation.
+                    SetWindowLongPtr(window,-16,new IntPtr(originalStyle | 0x00C00000));
+                    if((GetWindowLongPtr(window,-16).ToInt64() & 0x00C00000)!=0)
+                        throw new Exception("Native caption was restored after activation/style changes");
+                }
+            } finally { SetWindowLongPtr(window,-16,new IntPtr(originalStyle)); }
             IntPtr shape=CreateRectRgn(0,0,0,0);
             int kind=GetWindowRgn(window,shape);
             bool corner=PtInRegion(shape,1,1), center=PtInRegion(shape,100,100);
@@ -87,7 +102,7 @@ public static class AniboxWindowCheck {
                 if(SendMessage(window,0x84,IntPtr.Zero,new IntPtr(point)).ToInt32()!=edges[i])
                     throw new Exception("Borderless resizing is broken at edge "+edges[i]);
             }
-            return "PASS native frame has no caption/icon or non-client insets; rounded clipping and all four resize edges work";
+            return "PASS native caption stays suppressed across 4 activation/paint/style cycles; zero non-client insets, rounded clipping and all four resize edges work";
         }
         var watch=Stopwatch.StartNew();
         using(var backdrop=new Backdrop()) {

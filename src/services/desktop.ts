@@ -5,6 +5,7 @@ const nativeOnly = () =>
   Promise.reject(
     new Error('此操作需要 Windows 桌面版。浏览器预览支持导入、编辑和保存，不会启动代理或修改系统网络。'),
   );
+let previewLog = '';
 
 export const desktop: DesktopBridge = isTauri()
   ? {
@@ -22,6 +23,10 @@ export const desktop: DesktopBridge = isTauri()
       rulesStatus: () => invoke('rules_status'),
       updateRules: (force) => invoke('update_rules', { force }),
       currentConfig: () => invoke('current_config'),
+      runtimeLogs: () => invoke('runtime_logs'),
+      appLogs: () => invoke('app_logs'),
+      appendLog: (entry) => invoke('append_app_log', { entry }),
+      clearLogs: (kind) => invoke('clear_logs', { kind }),
       fetchSubscription: (url) => invoke('fetch_subscription', { url }),
       loadData: () => invoke('load_data'),
       saveData: (data) => invoke('save_data', { data }),
@@ -56,6 +61,14 @@ export const desktop: DesktopBridge = isTauri()
       rulesStatus: async () => ({ ready: false, source: '2dust/sing-box-rules' }),
       updateRules: nativeOnly,
       currentConfig: async () => null,
+      runtimeLogs: async () => '',
+      appLogs: async () => previewLog,
+      appendLog: async (entry) => {
+        previewLog = (previewLog + entry + '\n').slice(-65536);
+      },
+      clearLogs: async () => {
+        previewLog = '';
+      },
       fetchSubscription: nativeOnly,
       loadData: async () => null,
       saveData: async () => {},

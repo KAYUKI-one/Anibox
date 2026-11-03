@@ -5,7 +5,7 @@ import { build } from 'esbuild';
 import { spawn, execFileSync } from 'node:child_process';
 import { createServer as createHttpServer, request } from 'node:http';
 import { createServer as createTcpServer } from 'node:net';
-import { mkdir } from 'node:fs/promises';
+import { mkdir, readFile } from 'node:fs/promises';
 import path from 'node:path';
 import assert from 'node:assert/strict';
 
@@ -163,7 +163,7 @@ try {
     const config =
       core === 'xray'
         ? {
-            log: { loglevel: 'warning' },
+            log: { loglevel: 'info' },
             inbounds: [
               {
                 tag: 'socks-in',
@@ -177,7 +177,7 @@ try {
             outbounds: [{ protocol: 'freedom', tag: 'direct' }],
           }
         : {
-            log: { level: 'warn' },
+            log: { level: 'info' },
             inbounds: [
               { type: 'socks', tag: 'socks-in', listen: '127.0.0.1', listen_port: proxyPort },
               { type: 'http', tag: 'http-in', listen: '127.0.0.1', listen_port: proxyPort + 1 },
@@ -236,6 +236,15 @@ try {
     console.log(
       'PASS ' + core + ' real counters: ' + stats.uploadTotal + ' up / ' + stats.downloadTotal + ' down',
     );
+    const liveLog = await invoke('runtime_logs');
+    assert(liveLog.length > 0 && !liveLog.includes('\x1b'), 'Live native output must be readable');
+    const logFile = path.join(process.env.LOCALAPPDATA, 'io.anibox.qa', 'logs', 'core.log');
+    await pause(400);
+    assert((await readFile(logFile, 'utf8')).length > 0, 'Core output must reach disk');
+    await invoke('clear_logs', { kind: 'core' });
+    assert.equal(await invoke('runtime_logs'), '');
+    assert.equal(await readFile(logFile, 'utf8'), '');
+    assert.equal((await invoke('runtime_status')).state, 'running', 'Clearing logs must not stop the core');
     assert.equal((await invoke('stop_core')).state, 'stopped');
     const native = structuredClone(config);
     if (core === 'sing-box') native.route = { final: 'direct' };
@@ -339,6 +348,17 @@ try {
         `PASS ${core}: full DNS/routing template → occupied port → correct Windows system proxy endpoint → original settings restored`,
       );
     }
+  }
+  await invoke('append_app_log', { entry: 'QA persisted application log' });
+  assert((await invoke('app_logs')).includes('QA persisted application log'));
+  await invoke('clear_logs', { kind: 'app' });
+  assert.equal(await invoke('app_logs'), '');
+  console.log(
+    'PASS application/core logs persist to disk; live core logs can be cleared without disconnecting',
+  );
+  if (process.env.ANIBOX_CHECK_TUN_TRAFFIC === '1') {
+    const { checkTunTraffic } = await import('./check-tun-traffic.mjs');
+    await checkTunTraffic(invoke);
   }
   console.log('桌面集成验证通过；未访问外部节点。');
 } finally {

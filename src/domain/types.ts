@@ -124,6 +124,10 @@ export interface DesktopBridge {
   rulesStatus(): Promise<RuleStatus>;
   updateRules(force: boolean): Promise<RuleStatus>;
   currentConfig(): Promise<string | null>;
+  runtimeLogs(): Promise<string>;
+  appLogs(): Promise<string>;
+  appendLog(entry: string): Promise<void>;
+  clearLogs(kind: 'app' | 'core'): Promise<void>;
   fetchSubscription(url: string): Promise<string>;
   loadData(): Promise<string | null>;
   saveData(data: string): Promise<void>;
@@ -134,7 +138,7 @@ export interface DesktopBridge {
   exportData(data: string): Promise<string>;
   chooseStorageDirectory(): Promise<string | null>;
   setStorageDirectory(directory: string, data: string): Promise<StorageInfo>;
-  openStorageFolder(folder: 'config' | 'backgrounds'): Promise<void>;
+  openStorageFolder(folder: 'config' | 'backgrounds' | 'logs'): Promise<void>;
   setCloseBehavior(behavior: Settings['closeBehavior']): Promise<void>;
   close(action: 'tray' | 'exit'): Promise<void>;
 }

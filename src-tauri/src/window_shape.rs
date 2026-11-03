@@ -1,4 +1,66 @@
 #[cfg(windows)]
+pub fn install(window: &tauri::Window) -> Result<(), String> {
+    use windows_sys::Win32::{
+        Graphics::Dwm::{DwmSetWindowAttribute, DWMNCRP_DISABLED, DWMWA_NCRENDERING_POLICY},
+        UI::Shell::SetWindowSubclass,
+    };
+    let handle = window.hwnd().map_err(|e| e.to_string())?;
+    unsafe {
+        if SetWindowSubclass(handle.0, Some(borderless_proc), 0x414e4942, 0) == 0 {
+            return Err(format!(
+                "无法初始化无边框窗口：{}",
+                std::io::Error::last_os_error()
+            ));
+        }
+        let policy = DWMNCRP_DISABLED;
+        let _ = DwmSetWindowAttribute(
+            handle.0,
+            DWMWA_NCRENDERING_POLICY as u32,
+            &policy as *const _ as _,
+            std::mem::size_of_val(&policy) as u32,
+        );
+    }
+    apply(window);
+    Ok(())
+}
+
+#[cfg(windows)]
+unsafe extern "system" fn borderless_proc(
+    hwnd: windows_sys::Win32::Foundation::HWND,
+    message: u32,
+    wparam: usize,
+    lparam: isize,
+    id: usize,
+    _: usize,
+) -> isize {
+    use windows_sys::Win32::UI::{
+        Shell::{DefSubclassProc, RemoveWindowSubclass},
+        WindowsAndMessaging::*,
+    };
+    match message {
+        WM_NCPAINT | 0x00ae | 0x00af => 0,
+        // Keep Tao's activation/focus bookkeeping, but prevent DefWindowProc from
+        // painting a native caption into the transparent client surface on Alt+Tab.
+        WM_NCACTIVATE if IsIconic(hwnd) == 0 => DefSubclassProc(hwnd, message, wparam, -1),
+        WM_STYLECHANGING if lparam != 0 => {
+            let style = &mut *(lparam as *mut STYLESTRUCT);
+            if wparam as i32 == GWL_STYLE {
+                style.styleNew &= !WS_CAPTION;
+            }
+            if wparam as i32 == GWL_EXSTYLE {
+                style.styleNew &= !(WS_EX_WINDOWEDGE | WS_EX_CLIENTEDGE | WS_EX_DLGMODALFRAME);
+            }
+            DefSubclassProc(hwnd, message, wparam, lparam)
+        }
+        WM_NCDESTROY => {
+            RemoveWindowSubclass(hwnd, Some(borderless_proc), id);
+            DefSubclassProc(hwnd, message, wparam, lparam)
+        }
+        _ => DefSubclassProc(hwnd, message, wparam, lparam),
+    }
+}
+
+#[cfg(windows)]
 pub fn apply(window: &tauri::Window) {
     use std::sync::Mutex;
     use windows_sys::Win32::{

@@ -2,6 +2,7 @@
 
 mod core_output;
 mod core_updates;
+mod log_files;
 mod ports;
 mod process_job;
 mod proxy;
@@ -79,6 +80,7 @@ impl Default for RuntimeStatus {
 }
 #[derive(Default)]
 struct RuntimeState {
+    last_output: String,
     elevated: Option<tun::ElevatedSession>,
     endpoint: Option<traffic::Endpoint>,
     config: Option<String>,
@@ -91,6 +93,7 @@ struct RuntimeState {
 }
 #[derive(Default)]
 struct AppState {
+    app_log: Mutex<Option<log_files::Writer>>,
     runtime: Mutex<RuntimeState>,
     storage: Mutex<()>,
     rules: Mutex<()>,
@@ -425,6 +428,7 @@ fn stop_impl(app: &tauri::AppHandle) -> Result<RuntimeStatus, String> {
             runtime.output.take(),
         )
     };
+    let mut last_output = elevated.as_mut().and_then(|peer| peer.logs().ok());
     let result = if let Some(peer) = elevated.as_mut() {
         peer.stop()
     } else {
@@ -439,6 +443,12 @@ fn stop_impl(app: &tauri::AppHandle) -> Result<RuntimeStatus, String> {
     drop(job);
     if let Some(output) = output.as_mut() {
         output.finish();
+        last_output = Some(output.tail());
+    }
+    if let Some(log) = last_output.filter(|log| !log.is_empty()) {
+        if let Ok(mut runtime) = app.state::<AppState>().runtime.lock() {
+            runtime.last_output = log;
+        }
     }
     drop(elevated);
     if let Some(path) = path {
@@ -450,6 +460,15 @@ fn stop_impl(app: &tauri::AppHandle) -> Result<RuntimeStatus, String> {
         .lock()
         .map_err(|_| "统计不可用")?
         .previous = None;
+    let logger = app
+        .state::<AppState>()
+        .app_log
+        .lock()
+        .map_err(|_| "日志不可用")?
+        .clone();
+    if let Some(logger) = logger {
+        let _ = logger.flush();
+    }
     result?;
     Ok(RuntimeStatus::default())
 }
@@ -506,6 +525,7 @@ async fn start_core(
                 return Err("请先断开当前连接".into());
             }
             runtime.starting = Some(operation.clone());
+            runtime.last_output.clear();
         }
         struct StartGuard {
             app: tauri::AppHandle,
@@ -531,7 +551,11 @@ async fn start_core(
         } else {
             let exe = find_core(&app, core)?;
             let path = write_config(&app, &config, "runtime")?;
+            let log_path = app_dir(&app)?.join("logs/core.log");
             let mut cmd = command(&exe);
+            if matches!(core, Core::SingBox) {
+                cmd.arg("--disable-color");
+            }
             cmd.args(["run", "-c"])
                 .arg(&path)
                 .stdout(Stdio::piped())
@@ -545,6 +569,7 @@ async fn start_core(
                 }
             };
             let mut output = core_output::CoreOutput::default();
+            output.enable_file(log_path);
             if let Some(stdout) = child.stdout.take() {
                 output.drain(stdout);
             }
@@ -635,6 +660,7 @@ async fn start_core(
     if let Err(error) = &result {
         if let Ok(mut runtime) = feedback.state::<AppState>().runtime.lock() {
             if runtime.child.is_none() && runtime.elevated.is_none() && runtime.starting.is_none() {
+                runtime.last_output = error.clone();
                 runtime.status = RuntimeStatus {
                     state: "error".into(),
                     message: Some(error.clone()),
@@ -745,6 +771,88 @@ async fn rules_status(app: tauri::AppHandle) -> Result<rules::RuleStatus, String
 #[tauri::command]
 async fn update_rules(app: tauri::AppHandle, force: bool) -> Result<rules::RuleStatus, String> {
     rules::update(app, force).await
+}
+#[tauri::command]
+async fn runtime_logs(app: tauri::AppHandle) -> Result<String, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let state = app.state::<AppState>();
+        let mut runtime = state.runtime.lock().map_err(|_| "运行状态不可用")?;
+        let log = if let Some(peer) = runtime.elevated.as_mut() {
+            peer.logs().ok()
+        } else {
+            runtime.output.as_ref().map(core_output::CoreOutput::tail)
+        };
+        if let Some(log) = log {
+            runtime.last_output = log;
+        }
+        if runtime.last_output.is_empty() {
+            log_files::read_tail(&app_dir(&app)?.join("logs/core.log"))
+        } else {
+            Ok(runtime.last_output.clone())
+        }
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+#[tauri::command]
+async fn append_app_log(app: tauri::AppHandle, entry: String) -> Result<(), String> {
+    if entry.len() > 16384 {
+        return Err("日志条目过长".into());
+    }
+    let path = app_dir(&app)?.join("logs/app.log");
+    let state = app.state::<AppState>();
+    let mut logger = state.app_log.lock().map_err(|_| "日志不可用")?;
+    let writer = logger.get_or_insert_with(|| log_files::Writer::new(path));
+    writer.write(format!("{entry}\n").as_bytes());
+    Ok(())
+}
+#[tauri::command]
+async fn app_logs(app: tauri::AppHandle) -> Result<String, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let writer = app
+            .state::<AppState>()
+            .app_log
+            .lock()
+            .map_err(|_| "日志不可用")?
+            .clone();
+        if let Some(writer) = writer {
+            writer.flush()?;
+        }
+        log_files::read_tail(&app_dir(&app)?.join("logs/app.log"))
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+#[tauri::command]
+async fn clear_logs(app: tauri::AppHandle, kind: String) -> Result<(), String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let state = app.state::<AppState>();
+        match kind.as_str() {
+            "app" => {
+                let writer = state.app_log.lock().map_err(|_| "日志不可用")?.clone();
+                if let Some(writer) = writer {
+                    writer.clear()
+                } else {
+                    log_files::clear_file(&app_dir(&app)?.join("logs/app.log"))
+                }
+            }
+            "core" => {
+                let mut runtime = state.runtime.lock().map_err(|_| "运行状态不可用")?;
+                if let Some(peer) = runtime.elevated.as_mut() {
+                    peer.clear_logs()?;
+                } else if let Some(output) = runtime.output.as_mut() {
+                    output.clear()?;
+                } else {
+                    log_files::clear_file(&app_dir(&app)?.join("logs/core.log"))?;
+                }
+                runtime.last_output.clear();
+                Ok(())
+            }
+            _ => Err("日志类型无效".into()),
+        }
+    })
+    .await
+    .map_err(|e| e.to_string())?
 }
 #[tauri::command]
 async fn current_config(app: tauri::AppHandle) -> Result<Option<String>, String> {
@@ -870,7 +978,7 @@ fn main() {
         .setup(|app| {
             #[cfg(windows)]
             if let Some(window) = app.get_webview_window("main") {
-                window_shape::apply(&window.as_ref().window());
+                window_shape::install(&window.as_ref().window()).map_err(std::io::Error::other)?;
             }
             let _ = rules::ensure(app.handle());
             proxy::restore(&journal(app.handle()).map_err(std::io::Error::other)?)
@@ -969,6 +1077,10 @@ fn main() {
             rules_status,
             update_rules,
             current_config,
+            runtime_logs,
+            append_app_log,
+            app_logs,
+            clear_logs,
             core_updates::check_core_updates,
             core_updates::install_core_update,
             core_updates::rollback_core

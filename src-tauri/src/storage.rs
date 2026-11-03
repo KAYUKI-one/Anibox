@@ -411,10 +411,11 @@ pub async fn set_storage_directory(
 }
 #[tauri::command]
 pub async fn open_storage_folder(app: tauri::AppHandle, folder: String) -> Result<(), String> {
-    locked(app, move |_, root| {
+    locked(app, move |control, root| {
         let directory = match folder.as_str() {
             "config" => root.to_path_buf(),
             "backgrounds" => root.join("backgrounds"),
+            "logs" => control.join("logs"),
             _ => return Err("目录无效".into()),
         };
         fs::create_dir_all(&directory).map_err(|e| e.to_string())?;

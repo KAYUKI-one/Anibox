@@ -35,7 +35,7 @@ export function buildConfig(node: ProxyNode, data: AppData): { core: Core; confi
       outboundTag: data.route === 'direct' ? 'direct' : 'proxy',
     });
     config = {
-      log: { loglevel: 'warning' },
+      log: { loglevel: 'info' },
       dns: {
         tag: 'dns-internal',
         servers: [
@@ -94,10 +94,17 @@ export function buildConfig(node: ProxyNode, data: AppData): { core: Core; confi
     };
   } else {
     config = {
-      log: { level: 'warn', timestamp: true },
+      log: { level: 'info', timestamp: true },
       dns: {
+        strategy: 'prefer_ipv4',
         servers: [
-          { type: 'udp', tag: 'direct-dns', server: '223.5.5.5', server_port: 53 },
+          {
+            type: 'https',
+            tag: 'direct-dns',
+            server: '223.5.5.5',
+            path: '/dns-query',
+            tls: { enabled: true, server_name: 'dns.alidns.com' },
+          },
           {
             type: 'https',
             tag: 'proxy-dns',
@@ -124,6 +131,7 @@ export function buildConfig(node: ProxyNode, data: AppData): { core: Core; confi
                 interface_name: 'Anibox',
                 address: ['172.19.0.1/30', 'fdfe:dcba:9876::1/126'],
                 mtu: 1500,
+                stack: 'gvisor',
                 auto_route: true,
                 strict_route: true,
                 dns_mode: 'hijack',
@@ -135,7 +143,7 @@ export function buildConfig(node: ProxyNode, data: AppData): { core: Core; confi
       ],
       outbounds: [outbound, { type: 'direct', tag: 'direct' }],
       route: {
-        default_domain_resolver: 'direct-dns',
+        default_domain_resolver: { server: 'direct-dns', strategy: 'prefer_ipv4' },
         rules: [
           ...(data.mode === 'tun' ? [{ inbound: ['tun-in'], action: 'sniff' }] : []),
           ...(data.mode === 'tun' ? [{ inbound: ['tun-in'], port: 53, action: 'hijack-dns' }] : []),
