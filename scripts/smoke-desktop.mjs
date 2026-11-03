@@ -167,6 +167,8 @@ try {
 
   await new Promise((resolve) => target.listen(0, '127.0.0.1', resolve));
   const targetPort = target.address().port;
+  const { checkProfileRules } = await import('./check-profile-rules.mjs');
+  await checkProfileRules(invoke, page, await freePort(), targetPort);
   for (const core of ['xray', 'sing-box']) {
     const proxyPort = await freePort();
     blocker = createTcpServer();
@@ -204,7 +206,7 @@ try {
               ],
             },
           };
-    // The raw draft has relative resource paths. Managed start resolves those to the active cache generation.
+    // Both native and generated profiles resolve portable resources from the app directory.
     if (core === 'xray')
       assert.equal(await invoke('validate_config', { core, config: JSON.stringify(config) }), '内核校验通过');
     const started = await invoke('start_core', {

@@ -5,6 +5,7 @@ mod core_updates;
 mod log_files;
 mod ports;
 mod process_job;
+mod profile_rules;
 mod proxy;
 mod rules;
 mod storage;
@@ -171,8 +172,10 @@ fn bundled_core(app: &tauri::AppHandle, core: Core) -> Result<PathBuf, String> {
 
 fn command(exe: &Path) -> Command {
     let mut cmd = Command::new(exe);
+    if let Ok(root) = profile_rules::directory() {
+        cmd.current_dir(root);
+    }
     if let Some(parent) = exe.parent() {
-        cmd.current_dir(parent);
         cmd.env("XRAY_LOCATION_ASSET", parent);
     }
     #[cfg(windows)]
@@ -249,8 +252,9 @@ fn write_config(app: &tauri::AppHandle, config: &str, prefix: &str) -> Result<Pa
     Ok(path)
 }
 fn validate_impl(app: &tauri::AppHandle, core: Core, config: &str) -> Result<String, String> {
+    let config = profile_rules::ready(app, core, config)?;
     let exe = find_core(app, core)?;
-    let path = write_config(app, config, "validation")?;
+    let path = write_config(app, &config, "validation")?;
     let mut cmd = command(&exe);
     match core {
         Core::Xray => {
@@ -317,6 +321,16 @@ async fn validate_config(
         .map_err(|e| e.to_string())?
 }
 
+#[tauri::command]
+async fn prepare_config_rules(
+    app: tauri::AppHandle,
+    core: Core,
+    config: String,
+    download: bool,
+) -> Result<profile_rules::Preparation, String> {
+    profile_rules::prepare(app, core, config, download).await
+}
+
 fn http_port(config: &str, core: Core) -> Result<u16, String> {
     let value: Value = serde_json::from_str(config).map_err(|e| e.to_string())?;
     value
@@ -356,7 +370,7 @@ fn http_port(config: &str, core: Core) -> Result<u16, String> {
 }
 
 fn prepare_runtime(
-    app: &tauri::AppHandle,
+    _app: &tauri::AppHandle,
     core: Core,
     config: &str,
     managed: bool,
@@ -364,33 +378,6 @@ fn prepare_runtime(
     let mut value: Value = serde_json::from_str(config).map_err(|e| e.to_string())?;
     if !value.is_object() {
         return Err("配置顶层必须是 JSON 对象".into());
-    }
-    if managed && matches!(core, Core::SingBox) {
-        if let Some(entries) = value
-            .pointer_mut("/route/rule_set")
-            .and_then(Value::as_array_mut)
-        {
-            let root = rules::ensure(app)?;
-            for entry in entries {
-                match entry["tag"].as_str() {
-                    Some("geosite-cn") => {
-                        entry["path"] = root
-                            .join("geosite-cn.srs")
-                            .to_string_lossy()
-                            .to_string()
-                            .into()
-                    }
-                    Some("geoip-cn") => {
-                        entry["path"] = root
-                            .join("geoip-cn.srs")
-                            .to_string_lossy()
-                            .to_string()
-                            .into()
-                    }
-                    _ => (),
-                }
-            }
-        }
     }
     let is_tun = tun::has_tun(&value, core);
     if managed && is_tun {
@@ -489,6 +476,7 @@ async fn start_core(
             return Err("连接方式无效".into());
         }
         let managed = managed.unwrap_or(false);
+        let config = profile_rules::ready(&app, core, &config)?;
         let mut value: Value = serde_json::from_str(&config).map_err(|e| e.to_string())?;
         let mut reservation = if managed {
             Some(ports::prepare(&mut value, core)?)
@@ -1062,6 +1050,7 @@ fn main() {
         .invoke_handler(tauri::generate_handler![
             discover_cores,
             validate_config,
+            prepare_config_rules,
             start_core,
             stop_core,
             runtime_status,

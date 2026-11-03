@@ -416,6 +416,7 @@ pub async fn open_storage_folder(app: tauri::AppHandle, folder: String) -> Resul
             "config" => root.to_path_buf(),
             "backgrounds" => root.join("backgrounds"),
             "logs" => control.join("logs"),
+            "rules" => crate::profile_rules::directory()?.join("rules"),
             _ => return Err("目录无效".into()),
         };
         fs::create_dir_all(&directory).map_err(|e| e.to_string())?;

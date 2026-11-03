@@ -97,6 +97,10 @@ export interface RuleStatus {
   updatedAt?: number;
   source: string;
 }
+export interface RulePreparation {
+  config: string;
+  missing: { tag: string; filename: string; source: string | null }[];
+}
 export interface LogEntry {
   id: string;
   time: string;
@@ -117,6 +121,7 @@ export interface DesktopBridge {
   installCoreUpdate(core: Core, version: string, config?: string, managed?: boolean): Promise<CoreUpdate>;
   rollbackCore(core: Core): Promise<CoreUpdate>;
   validate(core: Core, config: string): Promise<string>;
+  prepareRules(core: Core, config: string, download: boolean): Promise<RulePreparation>;
   start(core: Core, config: string, mode: ConnectionMode, managed?: boolean): Promise<RuntimeStatus>;
   stop(): Promise<RuntimeStatus>;
   status(): Promise<RuntimeStatus>;
@@ -138,7 +143,7 @@ export interface DesktopBridge {
   exportData(data: string): Promise<string>;
   chooseStorageDirectory(): Promise<string | null>;
   setStorageDirectory(directory: string, data: string): Promise<StorageInfo>;
-  openStorageFolder(folder: 'config' | 'backgrounds' | 'logs'): Promise<void>;
+  openStorageFolder(folder: 'config' | 'backgrounds' | 'logs' | 'rules'): Promise<void>;
   setCloseBehavior(behavior: Settings['closeBehavior']): Promise<void>;
   close(action: 'tray' | 'exit'): Promise<void>;
 }

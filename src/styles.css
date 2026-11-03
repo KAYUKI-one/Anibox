@@ -748,6 +748,28 @@ code {
   align-items: center;
   gap: 12px;
 }
+.rule-download-list {
+  max-height: 240px;
+  overflow: auto;
+  margin: 16px 0;
+}
+.modal-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 10px;
+  margin-top: 16px;
+}
+.rule-download-list > div {
+  display: flex;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 8px 0;
+  border-bottom: 1px solid #dce7ef;
+}
+.rule-download-list > div > span:last-child {
+  color: #688399;
+  font-size: 11px;
+}
 .log-actions select {
   border: 1px solid #dce7ef;
   border-radius: 6px;

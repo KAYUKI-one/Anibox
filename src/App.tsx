@@ -51,6 +51,8 @@ import type {
   RuntimeStatus,
   TrafficStats,
   RuleStatus,
+  RulePreparation,
+  ConnectionMode,
   StorageInfo,
 } from './domain/types';
 import { appearanceFor, parseData, STORAGE_KEY } from './domain/storage';
@@ -209,6 +211,14 @@ export default function App() {
   const [importOpen, setImportOpen] = useState(false);
   const [subscriptionOpen, setSubscriptionOpen] = useState(false);
   const [preview, setPreview] = useState<{ core: Core; config: string } | null>(null);
+  const [ruleRequest, setRuleRequest] = useState<{
+    core: Core;
+    config: string;
+    name: string;
+    mode: ConnectionMode;
+    managed: boolean;
+    missing: RulePreparation['missing'];
+  } | null>(null);
   const [closeOpen, setCloseOpen] = useState(false);
   const [cores, setCores] = useState<CoreInfo[]>([]);
   const [coreUpdates, setCoreUpdates] = useState<CoreUpdate[]>([]);
@@ -597,6 +607,22 @@ export default function App() {
   closeHandler.current = requestClose;
   closeEditorState.current = (page === 'cores' && dirty) || (page === 'nodes' && nodeDirty);
 
+  const startPrepared = async (
+    request: { core: Core; config: string; name: string; mode: ConnectionMode; managed: boolean },
+    download: boolean,
+  ) => {
+    const prepared = await desktop.prepareRules(request.core, request.config, download);
+    if (prepared.missing.length) {
+      setRuleRequest({ ...request, missing: prepared.missing });
+      return;
+    }
+    const status = await desktop.start(request.core, prepared.config, request.mode, request.managed);
+    setRuleRequest(null);
+    setRuntime(status);
+    if (status.message) notify(status.message);
+    notify(`${coreLabel(request.core)} 已启动 · ${request.name}`, 'success');
+  };
+
   const connect = async () => {
     if (!data || busy) return;
     setBusy(true);
@@ -606,10 +632,7 @@ export default function App() {
         notify('代理已停止', 'success');
       } else {
         const target = activeConfig(data);
-        const status = await desktop.start(target.core, target.config, data.mode, !data.selectedProfileId);
-        setRuntime(status);
-        if (status.message) notify(status.message);
-        notify(`${coreLabel(target.core)} 已启动 · ${target.name}`, 'success');
+        await startPrepared({ ...target, mode: data.mode, managed: !data.selectedProfileId }, false);
       }
     } catch (error) {
       notify(messageOf(error), 'error');
@@ -1619,6 +1642,17 @@ export default function App() {
                   </button>
                   <button
                     className="button quiet"
+                    onClick={() =>
+                      void desktop
+                        .openStorageFolder('rules')
+                        .catch((error) => notify(messageOf(error), 'error'))
+                    }
+                  >
+                    <FolderOpen size={15} />
+                    打开规则集文件夹
+                  </button>
+                  <button
+                    className="button quiet"
                     disabled={storageBusy}
                     onClick={() => void resetBackground()}
                   >
@@ -1920,6 +1954,45 @@ export default function App() {
             >
               <Download size={15} />
               导出 JSON
+            </button>
+          </div>
+        </Modal>
+      )}
+      {ruleRequest && (
+        <Modal
+          title="缺少规则集"
+          onClose={() => {
+            if (!busy) setRuleRequest(null);
+          }}
+        >
+          <p>从 2dust/sing-box-rules 下载至程序的 rules 文件夹。</p>
+          <div className="rule-download-list">
+            {ruleRequest.missing.map((rule) => (
+              <div key={rule.tag}>
+                <span>{rule.tag}</span>
+                <span>{rule.source ? rule.filename : '未找到公共来源，请指定 URL 或本地文件'}</span>
+              </div>
+            ))}
+          </div>
+          <div className="modal-actions">
+            <button className="button quiet" disabled={busy} onClick={() => setRuleRequest(null)}>
+              取消
+            </button>
+            <button
+              className="button primary"
+              disabled={busy || ruleRequest.missing.some((rule) => !rule.source)}
+              onClick={async () => {
+                setBusy(true);
+                try {
+                  await startPrepared(ruleRequest, true);
+                } catch (error) {
+                  notify(messageOf(error), 'error');
+                } finally {
+                  setBusy(false);
+                }
+              }}
+            >
+              {busy ? '处理中…' : '下载并连接'}
             </button>
           </div>
         </Modal>

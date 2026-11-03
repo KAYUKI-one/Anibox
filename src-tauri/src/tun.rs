@@ -321,7 +321,7 @@ impl ConsoleCore {
             exe.display(),
             config_path.display()
         )));
-        let cwd = wide(exe.parent().ok_or("内核路径无效")?.as_os_str());
+        let cwd = wide(crate::profile_rules::directory()?.as_os_str());
         let mut startup: STARTUPINFOW = unsafe { std::mem::zeroed() };
         startup.cb = std::mem::size_of_val(&startup) as u32;
         let (reader, writer) = crate::core_output::pipe()?;
