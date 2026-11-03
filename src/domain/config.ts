@@ -96,7 +96,9 @@ export function buildConfig(node: ProxyNode, data: AppData): { core: Core; confi
     config = {
       log: { level: 'info', timestamp: true },
       dns: {
-        strategy: 'prefer_ipv4',
+        // A virtual IPv6 address alone is not an IPv6 internet connection. The
+        // default TUN stays IPv4-only; native JSON can opt into working IPv6.
+        strategy: data.mode === 'tun' ? 'ipv4_only' : 'prefer_ipv4',
         servers: [
           {
             type: 'https',
@@ -129,7 +131,7 @@ export function buildConfig(node: ProxyNode, data: AppData): { core: Core; confi
                 type: 'tun',
                 tag: 'tun-in',
                 interface_name: 'Anibox',
-                address: ['172.19.0.1/30', 'fdfe:dcba:9876::1/126'],
+                address: ['172.19.0.1/30'],
                 mtu: 1500,
                 stack: 'gvisor',
                 auto_route: true,
@@ -143,7 +145,10 @@ export function buildConfig(node: ProxyNode, data: AppData): { core: Core; confi
       ],
       outbounds: [outbound, { type: 'direct', tag: 'direct' }],
       route: {
-        default_domain_resolver: { server: 'direct-dns', strategy: 'prefer_ipv4' },
+        default_domain_resolver: {
+          server: 'direct-dns',
+          strategy: data.mode === 'tun' ? 'ipv4_only' : 'prefer_ipv4',
+        },
         rules: [
           ...(data.mode === 'tun' ? [{ inbound: ['tun-in'], action: 'sniff' }] : []),
           ...(data.mode === 'tun' ? [{ inbound: ['tun-in'], port: 53, action: 'hijack-dns' }] : []),

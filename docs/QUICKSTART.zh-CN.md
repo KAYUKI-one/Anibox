@@ -1,4 +1,4 @@
-# Anibox 0.5.3
+# Anibox 0.5.4
 
 双击 `Anibox.exe`，保持同级 `cores` 和 `rules` 文件夹完整。需 Windows x64 与 WebView2。
 如果旧实例仍在运行，请先从托盘退出再打开新版。
@@ -8,6 +8,8 @@
 3. 点击连接。TUN 会请求 Windows 管理员授权；取消授权不会更改网络。
 
 默认端口被占用时会自动避让，连接后主页显示实际使用的端口。
+TUN 连接期间暂时停用 Windows 系统代理与 PAC，断开后恢复原设置。
+默认 sing-box TUN 使用 IPv4，避免没有 IPv6 出口时出现连接失败；完整原生配置可自行启用 IPv6。
 
 Xray 默认优先，Hysteria2 / TUIC 默认使用 sing-box，包括其 TUN 入口。
 两种内核均可使用大陆分流。sing-box 规则每 24 小时后台更新，失败使用缓存；Xray DAT 随官方内核更新。

@@ -1,5 +1,5 @@
 //! A journalled lease: restore only when the current registry values still match our changes.
-//! Registry writes are exercised only by explicitly enabled system-proxy integration tests.
+//! System proxy and TUN connections restore the settings they temporarily replace.
 use serde::{Deserialize, Serialize};
 use std::path::Path;
 
@@ -112,18 +112,25 @@ mod platform {
         }
     }
 
-    pub fn apply(path: &Path, port: u16) -> Result<(), String> {
+    fn acquire(path: &Path, port: Option<u16>) -> Result<(), String> {
         if path.exists() {
             restore(path)?;
         }
         let reg = registry()?;
         let previous = snapshot(&reg)?;
-        let applied = Values(vec![
-            stored(1u32.to_reg_value()),
-            stored(format!("127.0.0.1:{port}").to_reg_value()),
-            stored("<local>;localhost;127.*;[::1]".to_reg_value()),
-            None,
-        ]);
+        let applied = if let Some(port) = port {
+            Values(vec![
+                stored(1u32.to_reg_value()),
+                stored(format!("127.0.0.1:{port}").to_reg_value()),
+                stored("<local>;localhost;127.*;[::1]".to_reg_value()),
+                None,
+            ])
+        } else {
+            let mut disabled = previous.clone();
+            disabled.0[0] = stored(0u32.to_reg_value());
+            disabled.0[3] = None;
+            disabled
+        };
         let lease = Lease { previous, applied };
         std::fs::write(path, serde_json::to_vec(&lease).map_err(|e| e.to_string())?)
             .map_err(|e| e.to_string())?;
@@ -135,6 +142,12 @@ mod platform {
             return Err(error);
         }
         Ok(())
+    }
+    pub fn apply(path: &Path, port: u16) -> Result<(), String> {
+        acquire(path, Some(port))
+    }
+    pub fn suspend(path: &Path) -> Result<(), String> {
+        acquire(path, None)
     }
     pub fn restore(path: &Path) -> Result<(), String> {
         if !path.exists() {
@@ -152,10 +165,14 @@ mod platform {
 }
 
 #[cfg(windows)]
-pub use platform::{apply, restore};
+pub use platform::{apply, restore, suspend};
 
 #[cfg(not(windows))]
 pub fn apply(_: &Path, _: u16) -> Result<(), String> {
+    Err("系统代理目前仅支持 Windows".into())
+}
+#[cfg(not(windows))]
+pub fn suspend(_: &Path) -> Result<(), String> {
     Err("系统代理目前仅支持 Windows".into())
 }
 #[cfg(not(windows))]

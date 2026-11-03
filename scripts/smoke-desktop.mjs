@@ -10,6 +10,19 @@ import path from 'node:path';
 import assert from 'node:assert/strict';
 
 const pause = (milliseconds) => new Promise((resolve) => setTimeout(resolve, milliseconds));
+const proxySnapshot = () =>
+  JSON.parse(
+    execFileSync(
+      'powershell',
+      [
+        '-NoProfile',
+        '-NonInteractive',
+        '-Command',
+        "$r=Get-Item -LiteralPath 'HKCU:\\Software\\Microsoft\\Windows\\CurrentVersion\\Internet Settings';$v=@{};foreach($n in @('ProxyEnable','ProxyServer','ProxyOverride','AutoConfigURL')){$v[$n]=$r.GetValue($n,$null,'DoNotExpandEnvironmentNames')};$v | ConvertTo-Json -Compress",
+      ],
+      { encoding: 'utf8', windowsHide: true },
+    ),
+  );
 async function freePort() {
   const server = createTcpServer();
   await new Promise((resolve, reject) => server.once('error', reject).listen(0, '127.0.0.1', resolve));
@@ -263,6 +276,7 @@ try {
   }
   if (process.env.ANIBOX_CHECK_TUN === '1') {
     for (const core of ['xray', 'sing-box']) {
+      const previousProxy = proxySnapshot();
       const config = await generatedConfig(core, 'tun');
       // Preserve full DNS, routing and protocol options; only disable host interception for this driver test.
       const inbound = config.inbounds.find((i) => (i.protocol ?? i.type) === 'tun');
@@ -289,10 +303,21 @@ try {
           managed: true,
         });
         assert.equal(status.state, 'running');
+        assert.equal(
+          proxySnapshot().ProxyEnable,
+          0,
+          'TUN must bypass stale HTTP/SOCKS system proxy endpoints',
+        );
+        assert.equal(proxySnapshot().AutoConfigURL, null, 'TUN must suspend PAC routing');
         await pause(1200);
         assert.equal((await invoke('runtime_status')).state, 'running');
       } finally {
         await invoke('stop_core');
+        assert.deepEqual(
+          proxySnapshot(),
+          previousProxy,
+          'TUN stop must restore previous Windows proxy settings',
+        );
       }
       console.log(
         `PASS ${core}: full DNS/routing template → elevated TUN driver start → status → stop (no default routes or DNS changes)`,

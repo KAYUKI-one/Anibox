@@ -545,7 +545,12 @@ async fn start_core(
             id: operation.clone(),
         };
         let (child, elevated, job, path, pid, output) = if is_tun {
-            let peer = tun::start(&app, core, config.clone(), managed, &mut reservation)?;
+            let journal_path = journal(&app)?;
+            let mut peer = tun::start(&app, core, config.clone(), managed, &mut reservation)?;
+            if let Err(error) = proxy::suspend(&journal_path) {
+                let _ = peer.stop();
+                return Err(error);
+            }
             let pid = peer.pid;
             (None, Some(peer), None, None, pid, None)
         } else {

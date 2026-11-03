@@ -20,7 +20,7 @@ export async function checkTunTraffic(invoke) {
         '-NoProfile',
         '-NonInteractive',
         '-Command',
-        "$r=Get-NetRoute -AddressFamily IPv4 -DestinationPrefix '0.0.0.0/0' | Sort-Object RouteMetric | Select-Object -First 1; $a=Get-NetIPAddress -AddressFamily IPv4 -InterfaceIndex $r.InterfaceIndex | Where-Object {$_.AddressState -eq 'Preferred'} | Select-Object -First 1; @{ip=$a.IPAddress;name=$r.InterfaceAlias;otherTun=!!(Get-NetRoute -AddressFamily IPv4 -DestinationPrefix '0.0.0.0/0' | Where-Object {$_.InterfaceAlias -match 'tun|wireguard'})} | ConvertTo-Json -Compress",
+        "$r=Get-NetRoute -AddressFamily IPv4 -DestinationPrefix '0.0.0.0/0' | Sort-Object RouteMetric | Select-Object -First 1; $a=Get-NetIPAddress -AddressFamily IPv4 -InterfaceIndex $r.InterfaceIndex | Where-Object {$_.AddressState -eq 'Preferred'} | Select-Object -First 1; @{ip=$a.IPAddress;name=$r.InterfaceAlias;otherTun=!!(Get-NetRoute -AddressFamily IPv4 -DestinationPrefix '0.0.0.0/0' | Where-Object {$_.InterfaceAlias -match 'tun|wireguard|^Anibox-'})} | ConvertTo-Json -Compress",
       ],
       { encoding: 'utf8', windowsHide: true },
     ),
@@ -56,7 +56,7 @@ export async function checkTunTraffic(invoke) {
     const data =
       type === 1
         ? Buffer.from((proxy ? nic.ip : '198.18.234.10').split('.').map(Number))
-        : type === 28 && proxy
+        : type === 28
           ? Buffer.from('20010db8ffff00000000000000000009', 'hex')
           : null;
     const header = Buffer.alloc(12);
@@ -195,8 +195,8 @@ export async function checkTunTraffic(invoke) {
         config.route.rules.splice(1, 0, { inbound: ['tun-in'], port: dnsProbePort, action: 'hijack-dns' });
       if (mode === 'tun')
         Object.assign(config.inbounds[0], {
-          address: ['172.31.247.1/30', 'fdfe:dcba:9876::1/126'],
-          route_address: [subnet, '2001:db8:ffff::/64'],
+          address: ['172.31.247.1/30'],
+          route_address: [subnet],
           dns_mode: 'disabled',
         });
       try {
@@ -262,24 +262,33 @@ export async function checkTunTraffic(invoke) {
             header.writeUInt16BE(0x0100, 2);
             header.writeUInt16BE(1, 4);
             const query = Buffer.concat([header, ...labels, Buffer.from([0, 0, 1, 0, 1])]);
-            const response = await new Promise((resolve, reject) => {
-              const timer = setTimeout(
-                () => reject(new Error('TUN DNS hijack → DoH → QUIC timed out')),
-                5000,
-              );
-              dnsClient.once('message', (packet) => {
-                clearTimeout(timer);
-                resolve(packet);
+            const exchange = (packet) =>
+              new Promise((resolve, reject) => {
+                const timer = setTimeout(
+                  () => reject(new Error('TUN DNS hijack → DoH → QUIC timed out')),
+                  5000,
+                );
+                dnsClient.once('message', (packet) => {
+                  clearTimeout(timer);
+                  resolve(packet);
+                });
+                dnsClient.once('error', (error) => {
+                  clearTimeout(timer);
+                  reject(error);
+                });
+                dnsClient.send(packet, dnsProbePort, '198.18.234.53');
               });
-              dnsClient.once('error', (error) => {
-                clearTimeout(timer);
-                reject(error);
-              });
-              dnsClient.send(query, dnsProbePort, '198.18.234.53');
-            });
+            const response = await exchange(query);
             assert.equal(response.readUInt16BE(0), 0x414e);
             assert.equal(response.readUInt16BE(6), 1);
             assert(response.includes(Buffer.from([198, 18, 234, 10])));
+            // The fixture deliberately advertises an unreachable AAAA record.
+            // prefer_ipv4 still returns it; an IPv4-only TUN must suppress it.
+            const ipv6Query = Buffer.from(query);
+            ipv6Query.writeUInt16BE(28, ipv6Query.length - 4);
+            const ipv6Response = await exchange(ipv6Query);
+            assert.equal(ipv6Response.readUInt16BE(2) & 15, 0, 'AAAA must return NOERROR');
+            assert.equal(ipv6Response.readUInt16BE(6), 0, 'IPv4-only TUN must not advertise unusable IPv6');
           } finally {
             dnsClient.close();
           }
